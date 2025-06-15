@@ -1,8 +1,9 @@
 import os
-import telegram
-from telegram.ext import Updater, CommandHandler
+from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from telegram import Update
+from telegram.ext import Updater, CommandHandler
 
 # Config
 TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -14,28 +15,37 @@ GSHEET_CREDENTIALS = {
 }
 SHEET_URL = os.getenv('SHEET_URL')
 
-# Google Sheets Setup
-scope = ["https://spreadsheets.google.com/feeds"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(GSHEET_CREDENTIALS, scope)
-client = gspread.authorize(creds)
-sheet = client.open_by_url(SHEET_URL).sheet1
+# Initialize Google Sheets
+def init_gsheet():
+    scope = ["https://spreadsheets.google.com/feeds"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(GSHEET_CREDENTIALS, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_url(SHEET_URL).sheet1
 
-# Bot Commands
-def start(update, context):
+sheet = init_gsheet()
+
+# Telegram Commands
+def start(update: Update, context):
     update.message.reply_text('✅ Bot Check-in Sales siap! Gunakan /checkin')
 
-def checkin(update, context):
+def checkin(update: Update, context):
     user = update.effective_user
-    row = [user.id, user.first_name, user.username, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+    row = [
+        str(user.id),
+        user.first_name or '',
+        user.username or '',
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ]
     sheet.append_row(row)
-    update.message.reply_text('🔄 Data berhasil dicatat!')
+    update.message.reply_text('✅ Data berhasil dicatat!')
 
-# Main
 def main():
     updater = Updater(TOKEN)
     dp = updater.dispatcher
+    
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("checkin", checkin))
+    
     updater.start_polling()
     updater.idle()
 
