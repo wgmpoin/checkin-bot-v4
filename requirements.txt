@@ -1,4 +1,4 @@
-python-telegram-bot==20.3  # Downgrade ke versi stabil
+python-telegram-bot==13.7
 gspread==3.7.0
 oauth2client==4.1.3
-Pillow==9.5.0  # Library alternatif untuk imghdr
+Pillow==8.4.0  # Versi stabil untuk Python 3.9
