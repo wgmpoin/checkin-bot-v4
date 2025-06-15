@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 import gspread
 from telegram import Update
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, Dispatcher
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ======================
@@ -109,13 +109,12 @@ def main():
             if not os.getenv(var):
                 raise ValueError(f"Missing required environment variable: {var}")
         
-        # Initialize bot
-        updater = Updater(os.getenv('TELEGRAM_TOKEN'))
-        dp = updater.dispatcher
+        # Initialize bot with correct version
+        updater = Updater(token=os.getenv('TELEGRAM_TOKEN'), use_context=True)
         
         # Add handlers
-        dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(CommandHandler("checkin", checkin))
+        updater.dispatcher.add_handler(CommandHandler("start", start))
+        updater.dispatcher.add_handler(CommandHandler("checkin", checkin))
         
         # Start polling
         updater.start_polling()
