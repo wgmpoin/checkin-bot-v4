@@ -9,19 +9,19 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# Setup logging
+# Logging config
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Global bot variables
+# Global bot setup
 bot = None
 dispatcher = None
 
 def init_gsheet():
-    """Initialize Google Sheets with error handling"""
+    """Initialize Google Sheets with minimal scope"""
     try:
         scope = ["https://spreadsheets.google.com/feeds"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(
@@ -50,31 +50,20 @@ def webhook():
 
 @app.route('/health')
 def health_check():
-    """Koyeb health check"""
+    """Koyeb health check endpoint"""
     return 'OK', 200
 
 def setup_bot():
-    """Initialize Telegram bot"""
+    """Initialize Telegram bot with 1 worker"""
     global bot, dispatcher
     bot = Updater(os.getenv('TELEGRAM_TOKEN'), use_context=True).bot
-    dispatcher = Dispatcher(bot, None, workers=0)
+    dispatcher = Dispatcher(bot, None, workers=1)  # Fix warning
     
     # Command handlers
     dispatcher.add_handler(CommandHandler("start", 
-        lambda u,c: u.message.reply_text('✅ Bot aktif! /checkin')))
+        lambda u,c: u.message.reply_text('✅ Bot siap! Gunakan /checkin')))
+    
     dispatcher.add_handler(CommandHandler("checkin", 
         lambda u,c: (
             init_gsheet().append_row([
-                str(u.effective_user.id),
-                u.effective_user.first_name or '',
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ]),
-            u.message.reply_text('✅ Data tersimpan!')
-        )))
-
-# Initialize
-setup_bot()
-
-if __name__ == '__main__':
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=8000)
+                str(u.eff
