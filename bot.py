@@ -48,7 +48,7 @@ def start(update: Update, context: CallbackContext):
         )
     else:
         update.message.reply_text(
-            "📍 KETIK /checkin UNTUK MULAI",
+            "📍 KLIK /checkin UNTUK MULAI",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("/checkin", request_location=True)]],
                 resize_keyboard=True
@@ -56,12 +56,12 @@ def start(update: Update, context: CallbackContext):
         )
 
 def start_checkin(update: Update, context: CallbackContext) -> int:
-    update.message.reply_text("🏷️ MASUKKAN NAMA LOKASI (Contoh: TB Makmur Jaya):")
+    update.message.reply_text("🏷️ MASUKKAN NAMA LOKASI:")
     return INPUT_LOKASI
 
 def input_lokasi(update: Update, context: CallbackContext) -> int:
     context.user_data['lokasi'] = update.message.text
-    update.message.reply_text("📍 MASUKKAN WILAYAH (Contoh: Surabaya, Jl. Sudirman):")
+    update.message.reply_text("📍 MASUKKAN WILAYAH:")
     return INPUT_WILAYAH
 
 def input_wilayah(update: Update, context: CallbackContext) -> int:
@@ -69,9 +69,14 @@ def input_wilayah(update: Update, context: CallbackContext) -> int:
     lokasi = context.user_data['lokasi']
     wilayah = update.message.text
     
-    # Simpan ke Google Sheet
     try:
+        # Debug: Cek koneksi ke Google Sheet
+        logger.info("Mencoba mengakses Google Sheet...")
         sheet = init_gsheet().sheet1
+        
+        # Debug: Cek data sebelum menyimpan
+        logger.info(f"Data yang akan disimpan: {[str(user.id), user.first_name, f'@{user.username}' if user.username else '-', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lokasi, wilayah, context.user_data.get('maps_link', '-')]}")
+        
         sheet.append_row([
             str(user.id),
             user.first_name,
@@ -82,18 +87,17 @@ def input_wilayah(update: Update, context: CallbackContext) -> int:
             context.user_data.get('maps_link', '-')
         ])
         
-        # Konfirmasi ke user
         update.message.reply_text(
             f"✅ CHECK-IN BERHASIL\n\n"
             f"🏠 Nama Lokasi: {lokasi}\n"
             f"📍 Wilayah: {wilayah}\n"
-            f"🕒 Waktu: {datetime.now().strftime('%H:%M')}\n"
-            f"🗺️ Maps: {context.user_data.get('maps_link', 'Tidak ada')}"
+            f"🕒 Waktu: {datetime.now().strftime('%H:%M')}"
         )
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        update.message.reply_text("❌ Gagal menyimpan data")
+        logger.error(f"Error saat menyimpan: {str(e)}", exc_info=True)
+        update.message.reply_text("❌ Gagal menyimpan data. Silakan coba lagi atau hubungi admin.")
     
+    context.user_data.clear()
     return ConversationHandler.END
 
 def handle_location(update: Update, context: CallbackContext):
@@ -102,24 +106,20 @@ def handle_location(update: Update, context: CallbackContext):
     context.user_data['maps_link'] = maps_link
     update.message.reply_text("📍 Lokasi diterima! Sekarang ketik /checkin")
 
-# ===== ADMIN TOOLS =====
-def add_admin(update: Update, context: CallbackContext):
-    if update.effective_user.id == OWNER_ID:
-        try:
-            new_admin = int(context.args[0])
-            ADMINS.append(new_admin)
-            update.message.reply_text(f"✅ Admin {new_admin} ditambahkan")
-        except:
-            update.message.reply_text("❌ Format salah. Contoh: /add_admin 123456")
-
 # ===== GOOGLE SHEETS =====
 def init_gsheet():
-    creds = ServiceAccountCredentials.from_json_keyfile_dict({
-        "type": "service_account",
-        "private_key": os.getenv('GSHEET_PRIVATE_KEY').replace('\\n', '\n'),
-        "client_email": os.getenv('GSHEET_CLIENT_EMAIL')
-    }, ["https://spreadsheets.google.com/feeds"])
-    return gspread.authorize(creds).open_by_url(os.getenv('SHEET_URL'))
+    try:
+        creds = ServiceAccountCredentials.from_json_keyfile_dict({
+            "type": "service_account",
+            "private_key": os.getenv('GSHEET_PRIVATE_KEY').replace('\\n', '\n'),
+            "client_email": os.getenv('GSHEET_CLIENT_EMAIL')
+        }, ["https://spreadsheets.google.com/feeds"])
+        
+        client = gspread.authorize(creds)
+        return client.open_by_url(os.getenv('SHEET_URL'))
+    except Exception as e:
+        logger.error(f"Gagal inisialisasi Google Sheet: {str(e)}", exc_info=True)
+        raise
 
 # ===== SETUP HANDLER =====
 conv_handler = ConversationHandler(
@@ -132,7 +132,6 @@ conv_handler = ConversationHandler(
 )
 
 dp.add_handler(CommandHandler('start', start))
-dp.add_handler(CommandHandler('add_admin', add_admin))
 dp.add_handler(MessageHandler(Filters.location, handle_location))
 dp.add_handler(conv_handler)
 
