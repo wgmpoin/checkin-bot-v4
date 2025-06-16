@@ -1,0 +1,57 @@
+<button id="shareBtn" class="share-button">
+  <i class="fa fa-map-marker-alt"></i> 
+  Share Location  <!-- Teks tombol diubah di sini -->
+</button>
+
+<script>
+document.getElementById('shareBtn').addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    alert("Browser tidak mendukung geolokasi!");
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    async (position) => {
+      try {
+        await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          })
+        });
+        alert("Lokasi tersimpan!");
+      } catch (error) {
+        alert("Gagal menyimpan: " + error.message);
+      }
+    },
+    (error) => {
+      alert(error.code === 1 ? "Aktifkan GPS terlebih dahulu!" : "Error: " + error.message);
+    },
+    { enableHighAccuracy: true }
+  );
+});
+</script>
+
+<style>
+/* Gaya tombol baru */
+.share-button {
+  background: #4285F4;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.3s;
+}
+
+.share-button:hover {
+  background: #3367D6;
+  transform: translateY(-2px);
+}
+</style>
