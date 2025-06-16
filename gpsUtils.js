@@ -1,53 +1,38 @@
-// Deteksi dukungan & status GPS
-export const checkGPS = async () => {
-  return new Promise((resolve) => {
+// Fungsi deteksi GPS dengan timeout
+function getCurrentPosition() {
+  return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      resolve({ supported: false });
+      reject(new Error('Browser tidak mendukung GPS'));
       return;
     }
 
-    // Cek permission status (hanya bekerja di beberapa browser)
-    if (navigator.permissions?.query) {
-      navigator.permissions.query({ name: 'geolocation' })
-        .then(permissionStatus => {
-          resolve({
-            supported: true,
-            enabled: permissionStatus.state === 'granted',
-            state: permissionStatus.state
-          });
-        });
-    } else {
-      // Fallback untuk browser lama
-      navigator.geolocation.getCurrentPosition(
-        () => resolve({ supported: true, enabled: true }),
-        () => resolve({ supported: true, enabled: false }),
-        { maximumAge: 0, timeout: 5000 }
-      );
-    }
-  });
-};
-
-// Fungsi wrapper dengan timeout
-export const getPositionWithTimeout = (options = {}) => {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('GPS_TIMEOUT')),
-      options.timeout || 15000
-    );
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,  // 10 detik timeout
+      maximumAge: 0
+    };
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        clearTimeout(timer);
-        resolve(pos);
+      position => resolve({
+        lat: position.coords.latitude,
+        lng: position.coords.longitude
+      }),
+      error => {
+        switch(error.code) {
+          case 1: 
+            reject(new Error('Aktifkan izin lokasi di browser'));
+            break;
+          case 2:
+            reject(new Error('Lokasi tidak terdeteksi (pastikan GPS aktif)'));
+            break;
+          case 3:
+            reject(new Error('Timeout: Cari lokasi lebih terbuka'));
+            break;
+          default:
+            reject(new Error('Error tidak diketahui'));
+        }
       },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-      { 
-        enableHighAccuracy: true,
-        ...options 
-      }
+      options
     );
   });
-};
+}
