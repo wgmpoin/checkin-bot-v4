@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime
-import pytz # Untuk penyesuaian zona waktu
+import pytz
 import gspread
 from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
@@ -9,7 +9,7 @@ from telegram.ext import (
     CallbackContext, ConversationHandler
 )
 from oauth2client.service_account import ServiceAccountCredentials
-from flask import Flask, request # Digunakan untuk menerima webhook
+from flask import Flask, request
 
 # ======================
 # SETUP FLASK UNTUK WEBHOOK
@@ -33,29 +33,22 @@ INPUT_NAMA_LOKASI, INPUT_WILAYAH, INPUT_LOCATION, FINAL_CHECKIN = range(4)
 # ======================
 # KONFIGURASI BOT
 # ======================
-# Mendapatkan token bot Telegram dari environment variable
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-# URL publik Koyeb Anda tanpa 'https://'
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST') 
-# Port yang disediakan Koyeb, default 8000
 PORT = int(os.environ.get('PORT', 8000))
-# Path unik untuk webhook, bisa menggunakan token bot untuk keamanan
 WEBHOOK_PATH = TELEGRAM_TOKEN
-# URL lengkap yang akan didaftarkan ke Telegram
 WEBHOOK_URL = f"https://{WEBHOOK_HOST}/{WEBHOOK_PATH}"
 
-# Inisialisasi Updater dan Dispatcher
 updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
 # ======================
 # MANAJEMEN PENGGUNA (OWNER, ADMIN, USER)
 # ======================
-OWNER_ID = int(os.getenv('OWNER_ID', '0')) # ID Owner bot
-ADMIN_IDS = [int(uid) for uid in os.getenv('ADMIN_IDS', '').split(',') if uid] # Daftar ID Admin
-AUTHORIZED_USER_IDS = [int(uid) for uid in os.getenv('AUTHORIZED_USER_IDS', '').split(',') if uid] # Daftar ID User
+OWNER_ID = int(os.getenv('OWNER_ID', '0'))
+ADMIN_IDS = [int(uid) for uid in os.getenv('ADMIN_IDS', '').split(',') if uid]
+AUTHORIZED_USER_IDS = [int(uid) for uid in os.getenv('AUTHORIZED_USER_IDS', '').split(',') if uid]
 
-# Fungsi untuk memeriksa peran pengguna
 def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
 
@@ -63,28 +56,22 @@ def is_admin(user_id: int) -> bool:
     return user_id == OWNER_ID or user_id in ADMIN_IDS
 
 def is_authorized_user(user_id: int) -> bool:
-    # Semua perintah dasar dilindungi untuk pengguna terotorisasi
-    # Jika Anda ingin bot bisa diakses publik (tanpa daftar user),
-    # hapus atau ubah logika di sini.
-    # Contoh: return True  # untuk semua user bisa akses
     return user_id == OWNER_ID or user_id in ADMIN_IDS or user_id in AUTHORIZED_USER_IDS
 
 def restricted(func):
-    """Decorator untuk membatasi akses ke fungsi hanya untuk pengguna terotorisasi."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        user_id = update.effective_user.id
-        if not update.effective_chat: # Handle cases where chat is None (e.g. some internal updates)
+        if not update.effective_chat:
             logger.warning(f"No effective chat for restricted command. Update type: {update.update_id}")
             return
+        user_id = update.effective_user.id
         if not is_authorized_user(user_id):
-            logger.warning(f"Unauthorized access attempt by user {user_id} for command {update.message.text}")
+            logger.warning(f"Unauthorized access attempt by user {user_id} for command {update.message.text if update.message else 'unknown'}")
             update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan perintah ini.")
             return
         return func(update, context, *args, **kwargs)
     return wrapper
 
 def admin_restricted(func):
-    """Decorator untuk membatasi akses ke fungsi hanya untuk Admin dan Owner."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.effective_user.id
         if not is_admin(user_id):
@@ -95,7 +82,6 @@ def admin_restricted(func):
     return wrapper
 
 def owner_restricted(func):
-    """Decorator untuk membatasi akses ke fungsi hanya untuk Owner."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.effective_user.id
         if not is_owner(user_id):
@@ -109,7 +95,6 @@ def owner_restricted(func):
 # KONFIGURASI GOOGLE SHEETS
 # ======================
 def get_credentials():
-    """Load and validate Google Sheets credentials"""
     try:
         private_key = os.getenv('GSHEET_PRIVATE_KEY', '').replace('\\n', '\n')
         
@@ -133,12 +118,8 @@ def get_credentials():
         raise
 
 def init_gsheet():
-    """Initialize Google Sheets connection and return client"""
     try:
-        # Menyesuaikan scope untuk gspread
-        # "https://www.googleapis.com/auth/drive.readonly" diperlukan jika sheet di drive yang tidak publicly shared
         scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.readonly"]
-        
         creds_dict = get_credentials()
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -155,9 +136,7 @@ def init_gsheet():
 # HELPER FUNCTIONS
 # ======================
 def get_local_timestamp(tz_name: str = 'Asia/Jakarta') -> str:
-    """Mendapatkan timestamp lokal sesuai zona waktu (sementara default Jakarta).
-       TODO: Implementasi penyimpanan zona waktu per user.
-    """
+    """Mendapatkan timestamp lokal sesuai zona waktu (standar GMT+7 / Asia/Jakarta)."""
     try:
         tz = pytz.timezone(tz_name)
         now = datetime.now(tz)
@@ -184,9 +163,9 @@ def checkin_start(update: Update, context: CallbackContext) -> int:
     """Memulai percakapan check-in."""
     logger.info(f"Checkin started by user {update.effective_user.id}")
     update.message.reply_text("🏷️ Baik, mari kita mulai check-in Anda!\n"
-                              "Mohon masukkan *Nama Lokasi* (contoh: TB Makmur Jaya):",
+                              "Mohon masukkan *Nama Lokasi*:",
                               parse_mode='Markdown')
-    context.user_data['temp_chat_id'] = update.effective_chat.id # Simpan chat ID untuk digunakan nanti
+    context.user_data['temp_chat_id'] = update.effective_chat.id
     return INPUT_NAMA_LOKASI
 
 @restricted
@@ -198,7 +177,7 @@ def checkin_nama_lokasi(update: Update, context: CallbackContext) -> int:
         return INPUT_NAMA_LOKASI
     context.user_data['nama_lokasi'] = nama_lokasi
     logger.info(f"User {update.effective_user.id} entered Nama Lokasi: {nama_lokasi}")
-    update.message.reply_text(f"Sekarang, mohon masukkan *Wilayah* (contoh: Surabaya, Denpasar, Duren Sawit):",
+    update.message.reply_text(f"Sekarang, mohon masukkan *Wilayah*:",
                               parse_mode='Markdown')
     return INPUT_WILAYAH
 
@@ -214,7 +193,6 @@ def checkin_wilayah(update: Update, context: CallbackContext) -> int:
     
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
 
-    # Buat tombol 'Share loc' yang meminta lokasi pengguna
     keyboard = [[KeyboardButton("📍 Share Lokasi Saya", request_location=True)]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
@@ -239,15 +217,12 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
     latitude = location.latitude
     longitude = location.longitude
     
-    # Konversi koordinat menjadi link Google Maps
-    # URL ini adalah "share link" yang universal dan berfungsi baik
-    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}"
+    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Revisi link maps
 
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
     wilayah = context.user_data.get('wilayah', 'N/A')
-    timestamp_lokal = get_local_timestamp() # Menggunakan fungsi timestamp lokal
+    timestamp_lokal = get_local_timestamp()
 
-    # Data yang akan ditulis ke Google Sheet
     row_data = [
         str(user.id),
         user.first_name or '',
@@ -259,17 +234,15 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
     ]
 
     try:
-        # Inisialisasi Google Sheet dan tambahkan baris
         gsheet_client = init_gsheet()
-        sheet = gsheet_client.sheet1 # Pastikan Anda ingin menulis ke sheet pertama
+        sheet = gsheet_client.sheet1
         sheet.append_row(row_data)
         logger.info(f"Check-in recorded for {user.id} at {timestamp_lokal} - {nama_lokasi}, {wilayah}")
         
-        # Konfirmasi ke pengguna
         update.message.reply_text(
             "✅ Data check-in berhasil dicatat!\n\n"
             f"👤 User ID: `{user.id}`\n"
-            f"🧑‍💻 Nama: `{user.first_name or 'N/A'}`\n" # Handle None for first_name
+            f"🧑‍💻 Nama: `{user.first_name or 'N/A'}`\n"
             f"📧 Username: `@{user.username}`\n"
             f"⏰ Waktu: `{timestamp_lokal}`\n"
             f"🏷️ Nama Lokasi: *{nama_lokasi}*\n"
@@ -277,13 +250,12 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
             f"📍 Lokasi Google Maps: [Link Lokasi]({Maps_link})\n\n"
             "Terima kasih!",
             parse_mode='Markdown',
-            disable_web_page_preview=True # Untuk mencegah preview link Google Maps
+            disable_web_page_preview=True
         )
     except Exception as e:
         logger.error(f"Gagal mencatat data check-in: {str(e)}")
         update.message.reply_text("❌ Gagal mencatat data. Mohon coba lagi nanti.")
 
-    # Akhiri percakapan
     return ConversationHandler.END
 
 def cancel_conversation(update: Update, context: CallbackContext) -> int:
@@ -294,25 +266,21 @@ def cancel_conversation(update: Update, context: CallbackContext) -> int:
 # ======================
 # MENU BOT (set_my_commands)
 # ======================
-# Hapus 'async' karena python-telegram-bot 13.x tidak menggunakan async untuk set_my_commands
 def set_bot_commands_sync(dispatcher):
-    """Menyetel perintah bot untuk ditampilkan di menu secara sinkron."""
     commands = [
         BotCommand("start", "Mulai bot dan lihat sambutan"),
         BotCommand("checkin", "Mulai proses check-in lokasi dan wilayah."),
         BotCommand("menu", "Tampilkan daftar perintah bot ini"),
         BotCommand("myid", "Lihat ID Telegram Anda"),
         BotCommand("help", "Bantuan dan informasi bot"),
-        # Perintah admin/owner (hanya terlihat di menu jika ada user yang berinteraksi)
         BotCommand("add_user", "Admin: Tambah pengguna terotorisasi"),
         BotCommand("remove_user", "Admin: Hapus pengguna terotorisasi"),
         BotCommand("list_users", "Admin: Daftar pengguna terotorisasi"),
         BotCommand("add_admin", "Owner: Tambah admin"),
-        BotCommand("remove_admin", "Owner: Tambah admin"),
+        BotCommand("remove_admin", "Owner: Hapus admin"),
         BotCommand("list_admins", "Owner: Daftar admin")
     ]
     
-    # Panggil metode set_my_commands secara sinkron (tanpa 'await')
     try:
         success = dispatcher.bot.set_my_commands(commands)
         if success:
@@ -321,11 +289,9 @@ def set_bot_commands_sync(dispatcher):
             logger.warning("Failed to set bot commands. Telegram API might return False.")
     except Exception as e:
         logger.error(f"Error setting bot commands: {e}")
-    # Tidak perlu mengembalikan apapun
 
 @restricted
 def show_menu(update: Update, context: CallbackContext):
-    """Menampilkan menu perintah."""
     msg = (
         "Berikut adalah perintah yang bisa Anda gunakan:\n"
         "/start - Memulai bot dan sambutan\n"
@@ -353,12 +319,10 @@ def show_menu(update: Update, context: CallbackContext):
 
 @restricted
 def my_id(update: Update, context: CallbackContext):
-    """Menampilkan ID Telegram pengguna."""
     user_id = update.effective_user.id
     update.message.reply_text(f"ID Telegram Anda adalah: `{user_id}`", parse_mode='Markdown')
 
 def help_command(update: Update, context: CallbackContext):
-    """Memberikan informasi bantuan."""
     update.message.reply_text(
         "Bot ini dirancang untuk memudahkan proses check-in sales dengan mencatat nama lokasi, wilayah, dan lokasi geografis ke Google Sheets.\n\n"
         "Untuk memulai, ketik /checkin.\n"
@@ -412,7 +376,7 @@ def add_user(update: Update, context: CallbackContext):
         return
     try:
         new_user_id = int(context.args[0])
-        if is_admin(new_user_id): # Admin dan Owner sudah otomatis authorized
+        if is_admin(new_user_id):
             update.message.reply_text(f"User ID {new_user_id} adalah Admin/Owner, sudah otomatis terotorisasi.")
         elif new_user_id not in AUTHORIZED_USER_IDS:
             AUTHORIZED_USER_IDS.append(new_user_id)
@@ -430,7 +394,7 @@ def remove_user(update: Update, context: CallbackContext):
         return
     try:
         user_to_remove = int(context.args[0])
-        if is_admin(user_to_remove): # Tidak bisa menghapus admin/owner dari daftar user
+        if is_admin(user_to_remove):
             update.message.reply_text(f"User ID {user_to_remove} adalah Admin/Owner, tidak bisa dihapus dari daftar pengguna terotorisasi secara langsung.")
         elif user_to_remove in AUTHORIZED_USER_IDS:
             AUTHORIZED_USER_IDS.remove(user_to_remove)
@@ -469,7 +433,6 @@ def main():
     try:
         logger.info("Starting bot initialization...")
         
-        # Validasi essential environment variables
         required_vars = [
             'TELEGRAM_TOKEN', 'GSHEET_PRIVATE_KEY', 'GSHEET_CLIENT_EMAIL',
             'SHEET_URL', 'WEBHOOK_HOST', 'OWNER_ID'
@@ -479,17 +442,13 @@ def main():
             if not os.getenv(var):
                 raise ValueError(f"Missing required environment variable: {var}")
         
-        # Mengatur perintah bot di menu Telegram (dipanggil secara sinkron)
         set_bot_commands_sync(dispatcher)
 
-        # DAFTARKAN HANDLER
-        # Command Handlers
         dispatcher.add_handler(CommandHandler("start", start_command))
         dispatcher.add_handler(CommandHandler("menu", show_menu))
         dispatcher.add_handler(CommandHandler("myid", my_id))
         dispatcher.add_handler(CommandHandler("help", help_command))
 
-        # Admin/Owner Handlers
         dispatcher.add_handler(CommandHandler("add_admin", add_admin))
         dispatcher.add_handler(CommandHandler("remove_admin", remove_admin))
         dispatcher.add_handler(CommandHandler("add_user", add_user))
@@ -497,7 +456,6 @@ def main():
         dispatcher.add_handler(CommandHandler("list_users", list_users))
         dispatcher.add_handler(CommandHandler("list_admins", list_admins))
 
-        # Conversation Handler untuk check-in
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('checkin', checkin_start)],
             states={
@@ -536,9 +494,9 @@ def health_check():
 # START FLASK SERVER
 # ======================
 if __name__ == '__main__':
-    main() # Inisialisasi handler bot sebelum Flask dijalankan
+    main()
     logger.info(f"Starting Flask server on host 0.0.0.0, port {PORT}") 
     try:
-        app.run(host="0.0.0.0", port=PORT) # Jalankan Flask server
+        app.run(host="0.0.0.0", port=PORT)
     except Exception as e:
         logger.critical(f"Flask server crashed: {e}")
