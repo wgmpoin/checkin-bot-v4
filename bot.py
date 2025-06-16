@@ -1,69 +1,51 @@
-import os
-import logging
-from datetime import datetime
-import gspread
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, Dispatcher
-from oauth2client.service_account import ServiceAccountCredentials
-from flask import Flask, request
+from telegram.ext import ConversationHandler
 
-app = Flask(__name__)
+# Definisikan state
+LOCATION_NAME, AREA = range(2)
 
-# Logging config
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+def start_checkin(update: Update, context: CallbackContext):
+    update.message.reply_text("🏷️ Masukkan NAMA LOKASI (contoh: TB Makmur Jaya, Kantor Pajak):")
+    return LOCATION_NAME
+
+def get_location_name(update: Update, context: CallbackContext):
+    context.user_data['location_name'] = update.message.text
+    update.message.reply_text("📍 Sekarang masukkan WILAYAH (contoh: Surabaya, Jl. Sudirman No. 5):")
+    return AREA
+
+def get_area_and_save(update: Update, context: CallbackContext):
+    user = update.effective_user
+    area = update.message.text
+    
+    sheet = init_gsheet().sheet1
+    sheet.append_row([
+        str(user.id),
+        user.first_name or '',
+        user.username or '',
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        context.user_data['location_name'],
+        area,
+        f"https://maps.google.com/?q={context.user_data.get('latitude', '')},{context.user_data.get('longitude', '')}"
+    ])
+    
+    update.message.reply_text(f"""
+✅ CHECK-IN BERHASIL
+🏠 Lokasi: {context.user_data['location_name']}
+📍 Wilayah: {area}
+🕒 Waktu: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+""")
+    
+    # Reset data
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# Tambahkan handler baru
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('checkin', start_checkin)],
+    states={
+        LOCATION_NAME: [MessageHandler(Filters.text & ~Filters.command, get_location_name)],
+        AREA: [MessageHandler(Filters.text & ~Filters.command, get_area_and_save)]
+    },
+    fallbacks=[]
 )
-logger = logging.getLogger(__name__)
 
-# Global bot setup
-bot = None
-dispatcher = None
-
-def init_gsheet():
-    """Initialize Google Sheets with minimal scope"""
-    try:
-        scope = ["https://spreadsheets.google.com/feeds"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(
-            {
-                "type": "service_account",
-                "private_key": os.getenv('GSHEET_PRIVATE_KEY').replace('\\n', '\n'),
-                "client_email": os.getenv('GSHEET_CLIENT_EMAIL')
-            },
-            scope
-        )
-        return gspread.authorize(creds).open_by_url(os.getenv('SHEET_URL')).sheet1
-    except Exception as e:
-        logger.error(f"Sheet error: {str(e)}")
-        raise
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Handle Telegram updates"""
-    try:
-        update = Update.de_json(request.get_json(), bot)
-        dispatcher.process_update(update)
-        return 'OK', 200
-    except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
-        return 'Error', 500
-
-@app.route('/health')
-def health_check():
-    """Koyeb health check endpoint"""
-    return 'OK', 200
-
-def setup_bot():
-    """Initialize Telegram bot with 1 worker"""
-    global bot, dispatcher
-    bot = Updater(os.getenv('TELEGRAM_TOKEN'), use_context=True).bot
-    dispatcher = Dispatcher(bot, None, workers=1)  # Fix warning
-    
-    # Command handlers
-    dispatcher.add_handler(CommandHandler("start", 
-        lambda u,c: u.message.reply_text('✅ Bot siap! Gunakan /checkin')))
-    
-    dispatcher.add_handler(CommandHandler("checkin", 
-        lambda u,c: (
-            init_gsheet().append_row([
-                str(u.eff
+dispatcher.add_handler(conv_handler)
