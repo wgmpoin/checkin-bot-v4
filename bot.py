@@ -498,4 +498,29 @@ def main():
         raise
 
 # ======================
-# ROUTE FLASK UNTUK
+# ROUTE FLASK UNTUK MENERIMA WEBHOOK
+# ======================
+@app.route(f'/{WEBHOOK_PATH}', methods=['POST'])
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), dispatcher.bot)
+        dispatcher.process_update(update)
+    return "ok"
+
+# ======================
+# HEALTH CHECK ENDPOINT UNTUK KOYEB
+# ======================
+@app.route('/healthz', methods=['GET'])
+def health_check():
+    return "OK", 200
+
+# ======================
+# START FLASK SERVER
+# ======================
+if __name__ == '__main__':
+    main() # Inisialisasi handler bot sebelum Flask dijalankan
+    logger.info(f"Starting Flask server on host 0.0.0.0, port {PORT}") 
+    try:
+        app.run(host="0.0.0.0", port=PORT) # Jalankan Flask server
+    except Exception as e:
+        logger.critical(f"Flask server crashed: {e}")
