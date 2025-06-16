@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 import pytz # Untuk penyesuaian zona waktu
 import gspread
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
     CallbackContext, ConversationHandler
@@ -73,8 +73,11 @@ def restricted(func):
     """Decorator untuk membatasi akses ke fungsi hanya untuk pengguna terotorisasi."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
         user_id = update.effective_user.id
+        if not update.effective_chat: # Handle cases where chat is None (e.g. some internal updates)
+            logger.warning(f"No effective chat for restricted command. Update type: {update.update_id}")
+            return
         if not is_authorized_user(user_id):
-            logger.warning(f"Unauthorized access attempt by user {user_id}")
+            logger.warning(f"Unauthorized access attempt by user {user_id} for command {update.message.text}")
             update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan perintah ini.")
             return
         return func(update, context, *args, **kwargs)
@@ -152,7 +155,9 @@ def init_gsheet():
 # HELPER FUNCTIONS
 # ======================
 def get_local_timestamp(tz_name: str = 'Asia/Jakarta') -> str:
-    """Mendapatkan timestamp lokal sesuai zona waktu"""
+    """Mendapatkan timestamp lokal sesuai zona waktu (sementara default Jakarta).
+       TODO: Implementasi penyimpanan zona waktu per user.
+    """
     try:
         tz = pytz.timezone(tz_name)
         now = datetime.now(tz)
@@ -177,6 +182,7 @@ def start_command(update: Update, context: CallbackContext):
 @restricted
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Memulai percakapan check-in."""
+    logger.info(f"Checkin started by user {update.effective_user.id}")
     update.message.reply_text("🏷️ Baik, mari kita mulai check-in Anda!\n"
                               "Mohon masukkan *Nama Lokasi* (contoh: TB Makmur Jaya):",
                               parse_mode='Markdown')
@@ -191,29 +197,41 @@ def checkin_nama_lokasi(update: Update, context: CallbackContext) -> int:
         update.message.reply_text("Nama lokasi tidak boleh kosong. Silakan coba lagi.")
         return INPUT_NAMA_LOKASI
     context.user_data['nama_lokasi'] = nama_lokasi
-    update.message.reply_text(f"📍 Nama Lokasi: *{nama_lokasi}*\n"
-                              f"Sekarang, mohon masukkan *Wilayah* (contoh: Surabaya, Denpasar, Duren Sawit):",
+    logger.info(f"User {update.effective_user.id} entered Nama Lokasi: {nama_lokasi}")
+    update.message.reply_text(f"Sekarang, mohon masukkan *Wilayah* (contoh: Surabaya, Denpasar, Duren Sawit):",
                               parse_mode='Markdown')
     return INPUT_WILAYAH
 
 @restricted
 def checkin_wilayah(update: Update, context: CallbackContext) -> int:
-    """Menerima wilayah dan meminta lokasi (koordinat)."""
+    """Menerima wilayah, menampilkan ringkasan, dan meminta lokasi dengan tombol."""
     wilayah = update.message.text
     if not wilayah:
         update.message.reply_text("Wilayah tidak boleh kosong. Silakan coba lagi.")
         return INPUT_WILAYAH
     context.user_data['wilayah'] = wilayah
-    update.message.reply_text(f"🌍 Wilayah: *{wilayah}*\n"
-                              f"Terakhir, mohon *kirim lokasi* Anda saat ini (melalui fitur 'Attach' -> 'Location' di Telegram):",
-                              parse_mode='Markdown')
+    logger.info(f"User {update.effective_user.id} entered Wilayah: {wilayah}")
+    
+    nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
+
+    # Buat tombol 'Share loc' yang meminta lokasi pengguna
+    keyboard = [[KeyboardButton("📍 Share Lokasi Saya", request_location=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+    update.message.reply_text(
+        f"✅ Lokasi: *{nama_lokasi}*\n"
+        f"🌍 Wilayah: *{wilayah}*\n\n"
+        f"Terakhir, mohon kirim lokasi Anda saat ini dengan menekan tombol di bawah ini:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
     return INPUT_LOCATION
 
 @restricted
 def checkin_location(update: Update, context: CallbackContext) -> int:
     """Menerima lokasi dan menyimpan semua data."""
     if not update.message.location:
-        update.message.reply_text("Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram. Jika tidak, ketik /cancel untuk membatalkan.")
+        update.message.reply_text("Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (tombol 'Share Lokasi Saya'). Jika tidak, ketik /cancel untuk membatalkan.")
         return INPUT_LOCATION
 
     user = update.effective_user
@@ -223,7 +241,7 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
     
     # Konversi koordinat menjadi link Google Maps
     # URL ini adalah "share link" yang universal dan berfungsi baik
-    Maps_link = f"https://maps.app.goo.gl/?link=https://maps.google.com/?q={latitude},{longitude}"
+    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}"
 
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
     wilayah = context.user_data.get('wilayah', 'N/A')
@@ -290,7 +308,7 @@ def set_bot_commands_sync(dispatcher):
         BotCommand("remove_user", "Admin: Hapus pengguna terotorisasi"),
         BotCommand("list_users", "Admin: Daftar pengguna terotorisasi"),
         BotCommand("add_admin", "Owner: Tambah admin"),
-        BotCommand("remove_admin", "Owner: Hapus admin"),
+        BotCommand("remove_admin", "Owner: Tambah admin"),
         BotCommand("list_admins", "Owner: Daftar admin")
     ]
     
