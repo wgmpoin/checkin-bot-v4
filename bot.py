@@ -22,39 +22,11 @@ logger = logging.getLogger(__name__)
 # State untuk Conversation
 INPUT_LOKASI, INPUT_WILAYAH = range(2)
 
-# Data Admin & Owner
-OWNER_ID = 12345678  # Ganti dengan ID Telegram Anda
-ADMINS = [87654321]  # Ganti dengan ID Admin lain
-
 # ===== INISIALISASI BOT =====
 updater = Updater(token=os.getenv('TELEGRAM_TOKEN'), use_context=True)
 dp = updater.dispatcher
 
 # ===== FUNGSI UTAMA =====
-def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    if user.id == OWNER_ID:
-        update.message.reply_text(
-            "👑 MODE OWNER\n"
-            "• /add_admin - Tambah admin\n"
-            "• /remove_admin - Hapus admin\n"
-            "• /checkin - Check-in"
-        )
-    elif user.id in ADMINS:
-        update.message.reply_text(
-            "🛠️ MODE ADMIN\n"
-            "• /checkin - Check-in\n"
-            "• /list_data - Lihat data"
-        )
-    else:
-        update.message.reply_text(
-            "📍 KLIK /checkin UNTUK MULAI",
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("/checkin", request_location=True)]],
-                resize_keyboard=True
-            )
-        )
-
 def start_checkin(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("🏷️ MASUKKAN NAMA LOKASI:")
     return INPUT_LOKASI
@@ -65,61 +37,64 @@ def input_lokasi(update: Update, context: CallbackContext) -> int:
     return INPUT_WILAYAH
 
 def input_wilayah(update: Update, context: CallbackContext) -> int:
-    user = update.effective_user
-    lokasi = context.user_data['lokasi']
-    wilayah = update.message.text
-    
     try:
-        # Debug: Cek koneksi ke Google Sheet
-        logger.info("Mencoba mengakses Google Sheet...")
-        sheet = init_gsheet().sheet1
-        
-        # Debug: Cek data sebelum menyimpan
-        logger.info(f"Data yang akan disimpan: {[str(user.id), user.first_name, f'@{user.username}' if user.username else '-', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), lokasi, wilayah, context.user_data.get('maps_link', '-')]}")
-        
-        sheet.append_row([
+        # 1. Persiapan Data
+        user = update.effective_user
+        data = [
             str(user.id),
-            user.first_name,
-            f"@{user.username}" if user.username else "-",
+            user.first_name or '-',
+            f"@{user.username}" if user.username else '-',
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            lokasi,
-            wilayah,
+            context.user_data['lokasi'],
+            update.message.text,
             context.user_data.get('maps_link', '-')
-        ])
+        ]
         
+        # 2. Simpan ke Google Sheet
+        sheet = get_gsheet()
+        sheet.append_row(data)
+        
+        # 3. Konfirmasi ke User
         update.message.reply_text(
-            f"✅ CHECK-IN BERHASIL\n\n"
-            f"🏠 Nama Lokasi: {lokasi}\n"
-            f"📍 Wilayah: {wilayah}\n"
-            f"🕒 Waktu: {datetime.now().strftime('%H:%M')}"
+            "✅ DATA TERSIMPAN\n"
+            f"Lokasi: {data[4]}\n"
+            f"Wilayah: {data[5]}\n"
+            f"Waktu: {data[3][11:16]}"
         )
+        
     except Exception as e:
-        logger.error(f"Error saat menyimpan: {str(e)}", exc_info=True)
-        update.message.reply_text("❌ Gagal menyimpan data. Silakan coba lagi atau hubungi admin.")
-    
-    context.user_data.clear()
-    return ConversationHandler.END
+        logger.error(f"GAGAL SIMPAN: {str(e)}", exc_info=True)
+        update.message.reply_text(
+            "❌ GAGAL MENYIMPAN\n"
+            "Silakan coba beberapa saat lagi\n"
+            "Atau hubungi admin jika masalah berlanjut"
+        )
+    finally:
+        context.user_data.clear()
+        return ConversationHandler.END
 
-def handle_location(update: Update, context: CallbackContext):
-    loc = update.message.location
-    maps_link = f"https://maps.app.goo.gl/?q={loc.latitude},{loc.longitude}"
-    context.user_data['maps_link'] = maps_link
-    update.message.reply_text("📍 Lokasi diterima! Sekarang ketik /checkin")
-
-# ===== GOOGLE SHEETS =====
-def init_gsheet():
+# ===== GOOGLE SHEETS SERVICE =====
+def get_gsheet():
+    """Mengembalikan sheet dengan error handling"""
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_dict({
+        creds = {
             "type": "service_account",
             "private_key": os.getenv('GSHEET_PRIVATE_KEY').replace('\\n', '\n'),
             "client_email": os.getenv('GSHEET_CLIENT_EMAIL')
-        }, ["https://spreadsheets.google.com/feeds"])
+        }
         
-        client = gspread.authorize(creds)
-        return client.open_by_url(os.getenv('SHEET_URL'))
+        scope = ["https://spreadsheets.google.com/feeds"]
+        credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
+        client = gspread.authorize(credentials)
+        
+        # Cek koneksi
+        spreadsheet = client.open_by_url(os.getenv('SHEET_URL'))
+        spreadsheet.listworksheets()  # Test koneksi
+        return spreadsheet.sheet1
+        
     except Exception as e:
-        logger.error(f"Gagal inisialisasi Google Sheet: {str(e)}", exc_info=True)
-        raise
+        logger.critical(f"ERROR SHEET: {str(e)}", exc_info=True)
+        raise Exception("Terjadi masalah dengan Google Sheets")
 
 # ===== SETUP HANDLER =====
 conv_handler = ConversationHandler(
@@ -131,9 +106,8 @@ conv_handler = ConversationHandler(
     fallbacks=[]
 )
 
-dp.add_handler(CommandHandler('start', start))
-dp.add_handler(MessageHandler(Filters.location, handle_location))
 dp.add_handler(conv_handler)
+dp.add_handler(MessageHandler(Filters.location, lambda u,c: c.user_data.update({'maps_link': f"https://maps.app.goo.gl/?q={u.message.location.latitude},{u.message.location.longitude}"}))
 
 # ===== WEBHOOK =====
 @app.route('/webhook', methods=['POST'])
