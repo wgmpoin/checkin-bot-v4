@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 import pytz
 import gspread
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, BotCommand, ReplyKeyboardRemove, KeyboardButton
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
     CallbackContext, ConversationHandler
@@ -99,7 +99,7 @@ def get_credentials():
         private_key = os.getenv('GSHEET_PRIVATE_KEY', '').replace('\\n', '\n')
         
         if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-            raise ValueError("Invalid private key format")
+            raise ValueError("Invalid private key format or missing BEGIN/END markers")
 
         return {
             "type": "service_account",
@@ -162,10 +162,11 @@ def start_command(update: Update, context: CallbackContext):
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Memulai percakapan check-in."""
     logger.info(f"Checkin started by user {update.effective_user.id}")
+    # Simpan chat_id grup untuk balasan akhir
+    context.user_data['original_chat_id'] = update.effective_chat.id
     update.message.reply_text("🏷️ Baik, mari kita mulai check-in Anda!\n"
                               "Mohon masukkan *Nama Lokasi*:",
                               parse_mode='Markdown')
-    context.user_data['temp_chat_id'] = update.effective_chat.id
     return INPUT_NAMA_LOKASI
 
 @restricted
@@ -183,7 +184,7 @@ def checkin_nama_lokasi(update: Update, context: CallbackContext) -> int:
 
 @restricted
 def checkin_wilayah(update: Update, context: CallbackContext) -> int:
-    """Menerima wilayah, menampilkan ringkasan, dan meminta lokasi dengan tombol."""
+    """Menerima wilayah dan meminta lokasi dengan instruksi manual."""
     wilayah = update.message.text
     if not wilayah:
         update.message.reply_text("Wilayah tidak boleh kosong. Silakan coba lagi.")
@@ -193,31 +194,33 @@ def checkin_wilayah(update: Update, context: CallbackContext) -> int:
     
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
 
-    keyboard = [[KeyboardButton("📍 Share Lokasi Saya", request_location=True)]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
     update.message.reply_text(
         f"✅ Lokasi: *{nama_lokasi}*\n"
         f"🌍 Wilayah: *{wilayah}*\n\n"
-        f"Terakhir, mohon kirim lokasi Anda saat ini dengan menekan tombol di bawah ini:",
-        reply_markup=reply_markup,
+        f"Terakhir, mohon kirim lokasi Anda saat ini dengan menekan tombol lampiran (📎) lalu pilih *Lokasi* dan *'Kirim lokasi saya saat ini'*. Tidak perlu mengirimkan tombol.", # Instruksi manual
         parse_mode='Markdown'
     )
+    # Tidak ada ReplyKeyboardMarkup di sini karena tidak bisa request_location di grup
     return INPUT_LOCATION
 
 @restricted
 def checkin_location(update: Update, context: CallbackContext) -> int:
-    """Menerima lokasi dan menyimpan semua data."""
-    if not update.message.location:
-        update.message.reply_text("Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (tombol 'Share Lokasi Saya'). Jika tidak, ketik /cancel untuk membatalkan.")
-        return INPUT_LOCATION
-
+    """Menerima lokasi dan menyimpan semua data, lalu membalas di grup."""
     user = update.effective_user
     location = update.message.location
+    original_chat_id = context.user_data.get('original_chat_id') # Ambil ID grup
+
+    if not location:
+        # Jika user tidak mengirim lokasi yang valid
+        update.message.reply_text("Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (bukan text atau foto). Ketik /cancel untuk membatalkan.")
+        return INPUT_LOCATION
+
     latitude = location.latitude
     longitude = location.longitude
     
-    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Revisi link maps
+    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Standard link Google Maps
+    # Alternatif jika link di atas bermasalah di beberapa ponsel:
+    # Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" 
 
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
     wilayah = context.user_data.get('wilayah', 'N/A')
@@ -235,32 +238,42 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
 
     try:
         gsheet_client = init_gsheet()
-        sheet = gsheet_client.sheet1
+        sheet = gsheet_client.sheet1 # Pastikan ini adalah nama sheet yang benar
         sheet.append_row(row_data)
         logger.info(f"Check-in recorded for {user.id} at {timestamp_lokal} - {nama_lokasi}, {wilayah}")
         
-        update.message.reply_text(
-            "✅ Data check-in berhasil dicatat!\n\n"
-            f"👤 User ID: `{user.id}`\n"
-            f"🧑‍💻 Nama: `{user.first_name or 'N/A'}`\n"
-            f"📧 Username: `@{user.username}`\n"
-            f"⏰ Waktu: `{timestamp_lokal}`\n"
-            f"🏷️ Nama Lokasi: *{nama_lokasi}*\n"
-            f"🌍 Wilayah: *{wilayah}*\n"
-            f"📍 Lokasi Google Maps: [Link Lokasi]({Maps_link})\n\n"
-            "Terima kasih!",
+        # Kirim konfirmasi ke CHAT ASAL (grup atau private chat)
+        context.bot.send_message(
+            chat_id=original_chat_id,
+            text=(
+                "✅ Data check-in berhasil dicatat!\n\n"
+                f"👤 User: `{user.first_name or 'N/A'}` (`@{user.username}`)\n"
+                f"⏰ Waktu: `{timestamp_lokal}`\n"
+                f"🏷️ Nama Lokasi: *{nama_lokasi}*\n"
+                f"🌍 Wilayah: *{wilayah}*\n"
+                f"📍 Lokasi Google Maps: [Link Lokasi]({Maps_link})\n\n"
+                "Terima kasih!"
+            ),
             parse_mode='Markdown',
             disable_web_page_preview=True
         )
     except Exception as e:
         logger.error(f"Gagal mencatat data check-in: {str(e)}")
-        update.message.reply_text("❌ Gagal mencatat data. Mohon coba lagi nanti.")
+        # Kirim pesan error ke CHAT ASAL
+        context.bot.send_message(
+            chat_id=original_chat_id,
+            text="❌ Gagal mencatat data. Mohon coba lagi nanti. Detail error ada di log bot."
+        )
 
+    # Hapus data sementara dari user_data
+    context.user_data.clear() 
     return ConversationHandler.END
 
 def cancel_conversation(update: Update, context: CallbackContext) -> int:
     """Membatalkan percakapan check-in."""
-    update.message.reply_text("Proses check-in dibatalkan.")
+    original_chat_id = context.user_data.get('original_chat_id', update.effective_chat.id)
+    context.bot.send_message(chat_id=original_chat_id, text="Proses check-in dibatalkan.")
+    context.user_data.clear()
     return ConversationHandler.END
 
 # ======================
@@ -315,7 +328,7 @@ def show_menu(update: Update, context: CallbackContext):
             "/remove_admin <id> - Hapus admin\n"
             "/list_admins - Daftar admin\n"
         )
-    update.message.reply_text(msg)
+    update.message.reply_text(msg, parse_mode='Markdown')
 
 @restricted
 def my_id(update: Update, context: CallbackContext):
@@ -325,7 +338,8 @@ def my_id(update: Update, context: CallbackContext):
 def help_command(update: Update, context: CallbackContext):
     update.message.reply_text(
         "Bot ini dirancang untuk memudahkan proses check-in sales dengan mencatat nama lokasi, wilayah, dan lokasi geografis ke Google Sheets.\n\n"
-        "Untuk memulai, ketik /checkin.\n"
+        "Untuk memulai, ketik /checkin di grup atau private chat.\n"
+        "Saat diminta lokasi, kirimkan lokasi Anda secara manual dari fitur lampiran (📎 Lokasi).\n"
         "Jika ada masalah, pastikan bot memiliki akses ke Google Sheets dan semua variabel lingkungan sudah diatur dengan benar."
     )
 
@@ -461,7 +475,7 @@ def main():
             states={
                 INPUT_NAMA_LOKASI: [MessageHandler(Filters.text & ~Filters.command, checkin_nama_lokasi)],
                 INPUT_WILAYAH: [MessageHandler(Filters.text & ~Filters.command, checkin_wilayah)],
-                INPUT_LOCATION: [MessageHandler(Filters.location & ~Filters.command, checkin_location)],
+                INPUT_LOCATION: [MessageHandler(Filters.location & ~Filters.command, checkin_location)], # Menerima lokasi langsung
             },
             fallbacks=[CommandHandler('cancel', cancel_conversation)],
         )
