@@ -90,7 +90,7 @@ def init_gsheet():
         sheet_url = os.getenv('SHEET_URL')
         if not sheet_url:
             raise ValueError("SHEET_URL environment variable not set")
-        
+
         return client.open_by_url(sheet_url)
     except Exception as e:
         logger.error(f"Google Sheets init failed: {str(e)}")
@@ -102,14 +102,14 @@ def load_user_roles_from_gsheet():
         gsheet = init_gsheet()
         users_sheet = gsheet.worksheet("Users") # Nama sheet harus "Users"
         records = users_sheet.get_all_records() # Mendapatkan semua baris sebagai list of dict
-        
+
         # Kosongkan cache lama
         user_roles_cache = {}
-        
+
         for record in records:
             user_id_str = str(record.get('user_id')).strip()
             role = str(record.get('role')).strip().lower()
-            
+
             if user_id_str and user_id_str.isdigit():
                 user_id = int(user_id_str)
                 user_roles_cache[user_id] = {
@@ -233,7 +233,7 @@ def checkin_wilayah(update: Update, context: CallbackContext) -> int:
         return INPUT_WILAYAH
     context.user_data['wilayah'] = wilayah
     logger.info(f"User {update.effective_user.id} entered Wilayah: {wilayah}")
-    
+
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
 
     update.message.reply_text(
@@ -260,7 +260,7 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
 
     latitude = location.latitude
     longitude = location.longitude
-    
+
     # Perbaikan link Google Maps untuk kompatibilitas yang lebih baik
     Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" 
 
@@ -286,7 +286,7 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
         sheet_checkin_data = gsheet_client.get_worksheet(0) 
         sheet_checkin_data.append_row(row_data)
         logger.info(f"Check-in recorded for {user.id} at {timestamp_lokal} - {nama_lokasi}, {wilayah}")
-        
+
         context.bot.send_message(
             chat_id=original_chat_id,
             text=(
@@ -335,7 +335,7 @@ def set_bot_commands_sync(dispatcher):
         BotCommand("remove_admin", "Owner: Hapus admin"),
         BotCommand("list_admins", "Owner: Daftar admin")
     ]
-    
+
     try:
         success = dispatcher.bot.set_my_commands(commands)
         if success:
@@ -399,7 +399,7 @@ def manage_user_role(update: Update, context: CallbackContext, target_role: str,
         target_user_id = int(context.args[0])
         gsheet = init_gsheet()
         users_sheet = gsheet.worksheet("Users")
-        
+
         # Cari baris user
         # Pastikan kita mendapatkan header terlebih dahulu untuk mapping kolom
         headers = users_sheet.row_values(1) 
@@ -413,7 +413,7 @@ def manage_user_role(update: Update, context: CallbackContext, target_role: str,
 
 
         user_cell = users_sheet.find(str(target_user_id), in_column=user_id_col_idx) # Cari user_id di kolom 'user_id'
-        
+
         current_user = update.effective_user
         current_timestamp = get_local_timestamp()
 
@@ -447,11 +447,11 @@ def manage_user_role(update: Update, context: CallbackContext, target_role: str,
                 if target_user_id == OWNER_ID: # Jika mencoba menambah owner ID yang sudah ada di ENV
                     update.message.reply_text(f"User ID {target_user_id} adalah Owner, tidak perlu ditambahkan secara manual.")
                     return
-                
+
                 new_row_values = [""] * len(headers) # Inisialisasi baris kosong
                 new_row_values[user_id_col_idx - 1] = str(target_user_id)
                 new_row_values[role_col_idx - 1] = target_role
-                
+
                 try:
                     chat_member = context.bot.get_chat_member(chat_id=target_user_id, user_id=target_user_id).user
                     if first_name_col_idx: new_row_values[first_name_col_idx - 1] = chat_member.first_name or ''
@@ -466,19 +466,19 @@ def manage_user_role(update: Update, context: CallbackContext, target_role: str,
 
                 users_sheet.append_row(new_row_values)
                 update.message.reply_text(f"User ID {target_user_id} berhasil ditambahkan sebagai {target_role.capitalize()}.")
-            
+
         elif action == 'remove':
             if not user_cell:
                 update.message.reply_text(f"User ID {target_user_id} tidak ditemukan dalam daftar peran pengguna.")
                 return
-            
+
             # Jika user_id yang ingin dihapus adalah OWNER_ID yang ada di ENV
             if target_user_id == OWNER_ID:
                 update.message.reply_text(f"Owner tidak bisa dihapus dari daftar peran.")
                 return
 
             current_role = user_roles_cache.get(target_user_id, {}).get('role', 'unauthorized')
-            
+
             # Verifikasi apakah peran yang ingin dihapus sesuai
             if current_role == target_role:
                 users_sheet.delete_rows(user_cell.row)
@@ -489,7 +489,7 @@ def manage_user_role(update: Update, context: CallbackContext, target_role: str,
                  update.message.reply_text(f"User ID {target_user_id} adalah {current_role.capitalize()}, tidak bisa dihapus dari daftar Pengguna Terotorisasi secara langsung. Gunakan /remove_admin jika dia admin.")
             else:
                 update.message.reply_text(f"User ID {target_user_id} memiliki peran '{current_role.capitalize()}', bukan '{target_role.capitalize()}'.")
-        
+
         # Setelah perubahan, muat ulang cache
         load_user_roles_from_gsheet()
         logger.info(f"{action.capitalize()} {target_role} completed for {target_user_id}. Cache reloaded.")
@@ -542,7 +542,7 @@ def list_users(update: Update, context: CallbackContext):
 def list_admins(update: Update, context: CallbackContext):
     msg = "Daftar Admin dan Owner:\n"
     found_admins = False
-    
+
     # Tambahkan owner dari ENV (dan pastikan ada di cache) terlebih dahulu
     owner_info = user_roles_cache.get(OWNER_ID, {})
     owner_name = owner_info.get('first_name', 'N/A')
@@ -559,12 +559,12 @@ def list_admins(update: Update, context: CallbackContext):
             username = data.get('username', 'N/A')
             msg += f"- `{uid}` | *Admin* | {first_name} (`@{username}`)\n"
             found_admins = True
-    
+
     if not found_admins and OWNER_ID == 0: # Hanya jika tidak ada admin dan OWNER_ID tidak diset
         msg += "Tidak ada admin atau owner yang terdaftar."
     elif not found_admins: # Hanya jika tidak ada admin dan OWNER_ID diset
         msg += "Tidak ada admin yang terdaftar selain owner."
-    
+
     update.message.reply_text(msg, parse_mode='Markdown')
 
 
@@ -574,19 +574,19 @@ def list_admins(update: Update, context: CallbackContext):
 def main():
     try:
         logger.info("Starting bot initialization...")
-        
+
         required_vars = [
             'TELEGRAM_TOKEN', 'GSHEET_PRIVATE_KEY', 'GSHEET_CLIENT_EMAIL',
             'SHEET_URL', 'WEBHOOK_HOST', 'OWNER_ID'
         ]
-        
+
         for var in required_vars:
             if not os.getenv(var):
                 raise ValueError(f"Missing required environment variable: {var}")
-        
+
         # Inisialisasi Google Sheets dan muat peran pengguna saat bot start
         load_user_roles_from_gsheet()
-        
+
         set_bot_commands_sync(dispatcher)
 
         dispatcher.add_handler(CommandHandler("start", start_command))
@@ -600,7 +600,7 @@ def main():
         dispatcher.add_handler(CommandHandler("add_user", add_user))
         dispatcher.add_handler(CommandHandler("remove_user", remove_user))
         dispatcher.add_handler(CommandHandler("list_users", list_users))
-        
+
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('checkin', checkin_start)],
             states={
@@ -612,7 +612,7 @@ def main():
             allow_reentry=True
         )
         dispatcher.add_handler(conv_handler)
-        
+
         logger.info(f"Bot configured for webhook. Listening on {WEBHOOK_HOST}:{PORT}/{WEBHOOK_PATH}")
 
     except Exception as e:
