@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 # ======================
 # STATE UNTUK CONVERSATIONHANDLER
 # ======================
-INPUT_NAMA_LOKASI, INPUT_WILAYAH, INPUT_LOCATION, FINAL_CHECKIN = range(4)
+INPUT_NAMA_LOKASI, INPUT_WILAYAH, INPUT_LOCATION = range(3) # FINAL_CHECKIN tidak perlu karena langsung END
 
 # ======================
 # KONFIGURASI BOT
 # ======================
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-WEBHOOK_HOST = os.getenv('WEBHOOK_HOST') 
+WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')
 PORT = int(os.environ.get('PORT', 8000))
 WEBHOOK_PATH = TELEGRAM_TOKEN
 WEBHOOK_URL = f"https://{WEBHOOK_HOST}/{WEBHOOK_PATH}"
@@ -45,9 +45,17 @@ dispatcher = updater.dispatcher
 # ======================
 # MANAJEMEN PENGGUNA (OWNER, ADMIN, USER)
 # ======================
+# Pastikan nilai di Koyeb tidak ada spasi di awal/akhir atau di antara koma.
+# Contoh: ADMIN_IDS = "123456789,987654321"
 OWNER_ID = int(os.getenv('OWNER_ID', '0'))
 ADMIN_IDS = [int(uid) for uid in os.getenv('ADMIN_IDS', '').split(',') if uid]
 AUTHORIZED_USER_IDS = [int(uid) for uid in os.getenv('AUTHORIZED_USER_IDS', '').split(',') if uid]
+
+# DEBUGGING: Verifikasi ID yang dimuat bot saat startup
+logger.info(f"DEBUG: OWNER_ID loaded: {OWNER_ID} (type: {type(OWNER_ID)})")
+logger.info(f"DEBUG: ADMIN_IDS loaded: {ADMIN_IDS} (type: {type(ADMIN_IDS)})")
+logger.info(f"DEBUG: AUTHORIZED_USER_IDS loaded: {AUTHORIZED_USER_IDS} (type: {type(AUTHORIZED_USER_IDS)})")
+
 
 def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
@@ -56,23 +64,30 @@ def is_admin(user_id: int) -> bool:
     return user_id == OWNER_ID or user_id in ADMIN_IDS
 
 def is_authorized_user(user_id: int) -> bool:
+    # Owner dan Admin otomatis terotorisasi
     return user_id == OWNER_ID or user_id in ADMIN_IDS or user_id in AUTHORIZED_USER_IDS
 
 def restricted(func):
+    """Decorator untuk membatasi akses ke pengguna terotorisasi."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        if not update.effective_chat:
-            logger.warning(f"No effective chat for restricted command. Update type: {update.update_id}")
+        if not update.effective_chat or not update.effective_user:
+            logger.warning(f"No effective chat or user for restricted command. Update: {update.update_id}")
             return
         user_id = update.effective_user.id
         if not is_authorized_user(user_id):
             logger.warning(f"Unauthorized access attempt by user {user_id} for command {update.message.text if update.message else 'unknown'}")
+            # Balas di chat yang sama
             update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan perintah ini.")
             return
         return func(update, context, *args, **kwargs)
     return wrapper
 
 def admin_restricted(func):
+    """Decorator untuk membatasi akses ke admin dan owner."""
     def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        if not update.effective_user:
+            logger.warning(f"No effective user for admin restricted command. Update: {update.update_id}")
+            return
         user_id = update.effective_user.id
         if not is_admin(user_id):
             logger.warning(f"Admin restricted command attempt by user {user_id}")
@@ -82,13 +97,17 @@ def admin_restricted(func):
     return wrapper
 
 def owner_restricted(func):
-    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+    """Decorator untuk membatasi akses ke owner saja."""
+    def wrapper(update: Update, CallbackContext, *args, **kwargs):
+        if not update.effective_user:
+            logger.warning(f"No effective user for owner restricted command. Update: {update.update_id}")
+            return
         user_id = update.effective_user.id
         if not is_owner(user_id):
             logger.warning(f"Owner restricted command attempt by user {user_id}")
             update.message.reply_text("Maaf, Anda tidak memiliki izin Owner untuk menggunakan perintah ini.")
             return
-        return func(update, context, *args, **kwargs)
+        return func(update, CallbackContext, *args, **kwargs)
     return wrapper
 
 # ======================
@@ -96,9 +115,12 @@ def owner_restricted(func):
 # ======================
 def get_credentials():
     try:
+        # Mengganti literal '\n' dengan karakter newline aktual
         private_key = os.getenv('GSHEET_PRIVATE_KEY', '').replace('\\n', '\n')
         
-        if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+        # Validasi sederhana untuk memastikan format kunci terlihat benar
+        if not private_key.startswith('-----BEGIN PRIVATE KEY-----') or \
+           not private_key.strip().endswith('-----END PRIVATE KEY-----'):
             raise ValueError("Invalid private key format or missing BEGIN/END markers")
 
         return {
@@ -119,7 +141,7 @@ def get_credentials():
 
 def init_gsheet():
     try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.readonly"]
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"] # Drive access untuk open_by_url
         creds_dict = get_credentials()
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -162,7 +184,7 @@ def start_command(update: Update, context: CallbackContext):
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Memulai percakapan check-in."""
     logger.info(f"Checkin started by user {update.effective_user.id}")
-    # Simpan chat_id grup untuk balasan akhir
+    # Simpan chat_id grup (atau private chat) untuk balasan akhir
     context.user_data['original_chat_id'] = update.effective_chat.id
     update.message.reply_text("🏷️ Baik, mari kita mulai check-in Anda!\n"
                               "Mohon masukkan *Nama Lokasi*:",
@@ -197,30 +219,31 @@ def checkin_wilayah(update: Update, context: CallbackContext) -> int:
     update.message.reply_text(
         f"✅ Lokasi: *{nama_lokasi}*\n"
         f"🌍 Wilayah: *{wilayah}*\n\n"
-        f"Terakhir, mohon kirim lokasi Anda saat ini dengan menekan tombol lampiran (📎) lalu pilih *Lokasi* dan *'Kirim lokasi saya saat ini'*. Tidak perlu mengirimkan tombol.", # Instruksi manual
+        f"Terakhir, mohon kirim lokasi Anda saat ini dengan menekan tombol lampiran (📎) lalu pilih *Lokasi* dan *'Kirim lokasi saya saat ini'*. Tidak perlu mengirimkan tombol.",
         parse_mode='Markdown'
     )
-    # Tidak ada ReplyKeyboardMarkup di sini karena tidak bisa request_location di grup
     return INPUT_LOCATION
 
 @restricted
 def checkin_location(update: Update, context: CallbackContext) -> int:
-    """Menerima lokasi dan menyimpan semua data, lalu membalas di grup."""
+    """Menerima lokasi dan menyimpan semua data, lalu membalas di chat asal."""
     user = update.effective_user
     location = update.message.location
-    original_chat_id = context.user_data.get('original_chat_id') # Ambil ID grup
+    original_chat_id = context.user_data.get('original_chat_id', update.effective_chat.id)
 
     if not location:
         # Jika user tidak mengirim lokasi yang valid
-        update.message.reply_text("Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (bukan text atau foto). Ketik /cancel untuk membatalkan.")
+        context.bot.send_message(
+            chat_id=original_chat_id,
+            text="Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (bukan teks atau foto). Ketik /cancel untuk membatalkan."
+        )
         return INPUT_LOCATION
 
     latitude = location.latitude
     longitude = location.longitude
     
-    Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Standard link Google Maps
-    # Alternatif jika link di atas bermasalah di beberapa ponsel:
-    # Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" 
+    # Link Google Maps yang lebih kompatibel
+    Maps_link = f"http://maps.google.com/maps?q=loc:{latitude},{longitude}" 
 
     nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
     wilayah = context.user_data.get('wilayah', 'N/A')
@@ -238,7 +261,9 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
 
     try:
         gsheet_client = init_gsheet()
-        sheet = gsheet_client.sheet1 # Pastikan ini adalah nama sheet yang benar
+        # Asumsi sheet pertama adalah yang digunakan (index 0)
+        # Atau bisa pakai: sheet = gsheet_client.worksheet("NamaSheetAnda") 
+        sheet = gsheet_client.sheet1
         sheet.append_row(row_data)
         logger.info(f"Check-in recorded for {user.id} at {timestamp_lokal} - {nama_lokasi}, {wilayah}")
         
@@ -255,7 +280,7 @@ def checkin_location(update: Update, context: CallbackContext) -> int:
                 "Terima kasih!"
             ),
             parse_mode='Markdown',
-            disable_web_page_preview=True
+            disable_web_page_preview=True # Untuk menghindari preview link yang besar
         )
     except Exception as e:
         logger.error(f"Gagal mencatat data check-in: {str(e)}")
@@ -356,12 +381,12 @@ def add_admin(update: Update, context: CallbackContext):
         new_admin_id = int(context.args[0])
         if new_admin_id == OWNER_ID:
             update.message.reply_text(f"User ID {new_admin_id} adalah Owner, tidak perlu ditambahkan sebagai Admin.")
-        elif new_admin_id not in ADMIN_IDS:
+        elif new_admin_id in ADMIN_IDS:
+            update.message.reply_text(f"User ID {new_admin_id} sudah menjadi Admin.")
+        else:
             ADMIN_IDS.append(new_admin_id)
             update.message.reply_text(f"User ID {new_admin_id} berhasil ditambahkan sebagai Admin.")
             logger.info(f"User {new_admin_id} added as Admin by {update.effective_user.id}")
-        else:
-            update.message.reply_text(f"User ID {new_admin_id} sudah menjadi Admin.")
     except ValueError:
         update.message.reply_text("User ID harus berupa angka.")
 
@@ -392,12 +417,12 @@ def add_user(update: Update, context: CallbackContext):
         new_user_id = int(context.args[0])
         if is_admin(new_user_id):
             update.message.reply_text(f"User ID {new_user_id} adalah Admin/Owner, sudah otomatis terotorisasi.")
-        elif new_user_id not in AUTHORIZED_USER_IDS:
+        elif new_user_id in AUTHORIZED_USER_IDS:
+            update.message.reply_text(f"User ID {new_user_id} sudah menjadi Pengguna Terotorisasi.")
+        else:
             AUTHORIZED_USER_IDS.append(new_user_id)
             update.message.reply_text(f"User ID {new_user_id} berhasil ditambahkan sebagai Pengguna Terotorisasi.")
             logger.info(f"User {new_user_id} added as Authorized User by {update.effective_user.id}")
-        else:
-            update.message.reply_text(f"User ID {new_user_id} sudah menjadi Pengguna Terotorisasi.")
     except ValueError:
         update.message.reply_text("User ID harus berupa angka.")
 
@@ -465,19 +490,22 @@ def main():
 
         dispatcher.add_handler(CommandHandler("add_admin", add_admin))
         dispatcher.add_handler(CommandHandler("remove_admin", remove_admin))
+        dispatcher.add_handler(CommandHandler("list_admins", list_admins))
         dispatcher.add_handler(CommandHandler("add_user", add_user))
         dispatcher.add_handler(CommandHandler("remove_user", remove_user))
         dispatcher.add_handler(CommandHandler("list_users", list_users))
-        dispatcher.add_handler(CommandHandler("list_admins", list_admins))
-
+        
+        # Conversation Handler untuk check-in
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('checkin', checkin_start)],
             states={
                 INPUT_NAMA_LOKASI: [MessageHandler(Filters.text & ~Filters.command, checkin_nama_lokasi)],
                 INPUT_WILAYAH: [MessageHandler(Filters.text & ~Filters.command, checkin_wilayah)],
-                INPUT_LOCATION: [MessageHandler(Filters.location & ~Filters.command, checkin_location)], # Menerima lokasi langsung
+                # Menerima lokasi dari semua jenis chat (private/group)
+                INPUT_LOCATION: [MessageHandler(Filters.location & ~Filters.command, checkin_location)], 
             },
             fallbacks=[CommandHandler('cancel', cancel_conversation)],
+            allow_reentry=True # Izinkan user memulai ulang conversation jika macet
         )
         dispatcher.add_handler(conv_handler)
         
