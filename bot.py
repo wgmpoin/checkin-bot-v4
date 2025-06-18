@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ======================
 # STATE UNTUK CONVERSATIONHANDLER
 # ======================
-INPUT_NAMA_LOKASI, INPUT_WILAYAH, INPUT_LOCATION = range(3) # FINAL_CHECKIN tidak perlu karena langsung END
+INPUT_NAMA_LOKASI, INPUT_WILAYAH, INPUT_LOCATION = range(3)
 
 # ======================
 # KONFIGURASI BOT
@@ -43,82 +43,24 @@ updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
 # ======================
-# MANAJEMEN PENGGUNA (OWNER, ADMIN, USER)
+# MANAJEMEN PENGGUNA (OWNER, ADMIN, USER) - SEKARANG DARI GOOGLE SHEETS
 # ======================
-# Pastikan nilai di Koyeb tidak ada spasi di awal/akhir atau di antara koma.
-# Contoh: ADMIN_IDS = "123456789,987654321"
-OWNER_ID = int(os.getenv('OWNER_ID', '0'))
-ADMIN_IDS = [int(uid) for uid in os.getenv('ADMIN_IDS', '').split(',') if uid]
-AUTHORIZED_USER_IDS = [int(uid) for uid in os.getenv('AUTHORIZED_USER_IDS', '').split(',') if uid]
+OWNER_ID = int(os.getenv('OWNER_ID', '0')) # Owner_ID masih dari ENV
+user_roles_cache = {} # Cache untuk menyimpan user roles dari Google Sheet
 
-# DEBUGGING: Verifikasi ID yang dimuat bot saat startup
-logger.info(f"DEBUG: OWNER_ID loaded: {OWNER_ID} (type: {type(OWNER_ID)})")
-logger.info(f"DEBUG: ADMIN_IDS loaded: {ADMIN_IDS} (type: {type(ADMIN_IDS)})")
-logger.info(f"DEBUG: AUTHORIZED_USER_IDS loaded: {AUTHORIZED_USER_IDS} (type: {type(AUTHORIZED_USER_IDS)})")
+def get_local_timestamp(tz_name: str = 'Asia/Jakarta') -> str:
+    """Mendapatkan timestamp lokal sesuai zona waktu (standar GMT+7 / Asia/Jakarta)."""
+    try:
+        tz = pytz.timezone(tz_name)
+        now = datetime.now(tz)
+        return now.strftime("%Y-%m-%d %H:%M:%S")
+    except pytz.UnknownTimeZoneError:
+        logger.error(f"Unknown timezone: {tz_name}. Falling back to UTC.")
+        return datetime.now(pytz.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-
-def is_owner(user_id: int) -> bool:
-    return user_id == OWNER_ID
-
-def is_admin(user_id: int) -> bool:
-    return user_id == OWNER_ID or user_id in ADMIN_IDS
-
-def is_authorized_user(user_id: int) -> bool:
-    # Owner dan Admin otomatis terotorisasi
-    return user_id == OWNER_ID or user_id in ADMIN_IDS or user_id in AUTHORIZED_USER_IDS
-
-def restricted(func):
-    """Decorator untuk membatasi akses ke pengguna terotorisasi."""
-    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        if not update.effective_chat or not update.effective_user:
-            logger.warning(f"No effective chat or user for restricted command. Update: {update.update_id}")
-            return
-        user_id = update.effective_user.id
-        if not is_authorized_user(user_id):
-            logger.warning(f"Unauthorized access attempt by user {user_id} for command {update.message.text if update.message else 'unknown'}")
-            # Balas di chat yang sama
-            update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan perintah ini.")
-            return
-        return func(update, context, *args, **kwargs)
-    return wrapper
-
-def admin_restricted(func):
-    """Decorator untuk membatasi akses ke admin dan owner."""
-    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        if not update.effective_user:
-            logger.warning(f"No effective user for admin restricted command. Update: {update.update_id}")
-            return
-        user_id = update.effective_user.id
-        if not is_admin(user_id):
-            logger.warning(f"Admin restricted command attempt by user {user_id}")
-            update.message.reply_text("Maaf, Anda tidak memiliki izin Admin untuk menggunakan perintah ini.")
-            return
-        return func(update, context, *args, **kwargs)
-    return wrapper
-
-def owner_restricted(func):
-    """Decorator untuk membatasi akses ke owner saja."""
-    def wrapper(update: Update, CallbackContext, *args, **kwargs):
-        if not update.effective_user:
-            logger.warning(f"No effective user for owner restricted command. Update: {update.update_id}")
-            return
-        user_id = update.effective_user.id
-        if not is_owner(user_id):
-            logger.warning(f"Owner restricted command attempt by user {user_id}")
-            update.message.reply_text("Maaf, Anda tidak memiliki izin Owner untuk menggunakan perintah ini.")
-            return
-        return func(update, CallbackContext, *args, **kwargs)
-    return wrapper
-
-# ======================
-# KONFIGURASI GOOGLE SHEETS
-# ======================
 def get_credentials():
     try:
-        # Mengganti literal '\n' dengan karakter newline aktual
         private_key = os.getenv('GSHEET_PRIVATE_KEY', '').replace('\\n', '\n')
-        
-        # Validasi sederhana untuk memastikan format kunci terlihat benar
         if not private_key.startswith('-----BEGIN PRIVATE KEY-----') or \
            not private_key.strip().endswith('-----END PRIVATE KEY-----'):
             raise ValueError("Invalid private key format or missing BEGIN/END markers")
@@ -141,7 +83,7 @@ def get_credentials():
 
 def init_gsheet():
     try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"] # Drive access untuk open_by_url
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = get_credentials()
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
@@ -154,18 +96,97 @@ def init_gsheet():
         logger.error(f"Google Sheets init failed: {str(e)}")
         raise
 
-# ======================
-# HELPER FUNCTIONS
-# ======================
-def get_local_timestamp(tz_name: str = 'Asia/Jakarta') -> str:
-    """Mendapatkan timestamp lokal sesuai zona waktu (standar GMT+7 / Asia/Jakarta)."""
+def load_user_roles_from_gsheet():
+    global user_roles_cache
     try:
-        tz = pytz.timezone(tz_name)
-        now = datetime.now(tz)
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    except pytz.UnknownTimeZoneError:
-        logger.error(f"Unknown timezone: {tz_name}. Falling back to UTC.")
-        return datetime.now(pytz.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        gsheet = init_gsheet()
+        users_sheet = gsheet.worksheet("Users") # Nama sheet harus "Users"
+        records = users_sheet.get_all_records() # Mendapatkan semua baris sebagai list of dict
+        
+        # Kosongkan cache lama
+        user_roles_cache = {}
+        
+        for record in records:
+            user_id_str = str(record.get('user_id')).strip()
+            role = str(record.get('role')).strip().lower()
+            
+            if user_id_str and user_id_str.isdigit():
+                user_id = int(user_id_str)
+                user_roles_cache[user_id] = {
+                    'role': role,
+                    'first_name': record.get('first_name', ''),
+                    'username': record.get('username', '')
+                }
+        logger.info(f"User roles loaded from Google Sheet. Loaded {len(user_roles_cache)} entries.")
+        # DEBUG: Menampilkan isi cache (HATI-HATI JIKA DAFTARNYA SANGAT BESAR)
+        # logger.info(f"DEBUG: user_roles_cache: {user_roles_cache}")
+    except gspread.exceptions.SpreadsheetNotFound:
+        logger.critical("Google Sheet 'Users' not found. Please ensure the SHEET_URL is correct and the sheet named 'Users' exists.")
+        # Jika sheet tidak ditemukan, kita tidak bisa melanjutkan, bot mungkin akan crash atau tidak berfungsi
+        # Mungkin tambahkan logika untuk membalas ke owner bot
+    except Exception as e:
+        logger.critical(f"Failed to load user roles from Google Sheet: {str(e)}")
+        # Jika ada error, bot mungkin tidak bisa memverifikasi izin
+        # Mungkin tambahkan logika untuk membalas ke owner bot
+
+def get_user_role(user_id: int) -> str:
+    """Mendapatkan peran pengguna dari cache."""
+    if user_id == OWNER_ID:
+        return 'owner'
+    return user_roles_cache.get(user_id, {}).get('role', 'unauthorized')
+
+def is_owner(user_id: int) -> bool:
+    return get_user_role(user_id) == 'owner'
+
+def is_admin(user_id: int) -> bool:
+    role = get_user_role(user_id)
+    return role in ['owner', 'admin']
+
+def is_authorized_user(user_id: int) -> bool:
+    role = get_user_role(user_id)
+    return role in ['owner', 'admin', 'authorized_user']
+
+def restricted(func):
+    """Decorator untuk membatasi akses ke pengguna terotorisasi (owner, admin, authorized_user)."""
+    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        if not update.effective_chat or not update.effective_user:
+            logger.warning(f"No effective chat or user for restricted command. Update: {update.update_id}")
+            return
+        user_id = update.effective_user.id
+        if not is_authorized_user(user_id):
+            logger.warning(f"Unauthorized access attempt by user {user_id} ({update.effective_user.username}) for command {update.message.text if update.message else 'unknown'}")
+            update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan perintah ini. Silakan hubungi admin bot untuk akses.")
+            return
+        return func(update, context, *args, **kwargs)
+    return wrapper
+
+def admin_restricted(func):
+    """Decorator untuk membatasi akses ke admin dan owner."""
+    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        if not update.effective_user:
+            logger.warning(f"No effective user for admin restricted command. Update: {update.update_id}")
+            return
+        user_id = update.effective_user.id
+        if not is_admin(user_id):
+            logger.warning(f"Admin restricted command attempt by user {user_id} ({update.effective_user.username})")
+            update.message.reply_text("Maaf, Anda tidak memiliki izin Admin untuk menggunakan perintah ini.")
+            return
+        return func(update, context, *args, **kwargs)
+    return wrapper
+
+def owner_restricted(func):
+    """Decorator untuk membatasi akses ke owner saja."""
+    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
+        if not update.effective_user:
+            logger.warning(f"No effective user for owner restricted command. Update: {update.update_id}")
+            return
+        user_id = update.effective_user.id
+        if not is_owner(user_id):
+            logger.warning(f"Owner restricted command attempt by user {user_id} ({update.effective_user.username})")
+            update.message.reply_text("Maaf, Anda tidak memiliki izin Owner untuk menggunakan perintah ini.")
+            return
+        return func(update, context, *args, **kwargs)
+    return wrapper
 
 # ======================
 # HANDLER COMMANDS & CONVERSATION
@@ -184,7 +205,6 @@ def start_command(update: Update, context: CallbackContext):
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Memulai percakapan check-in."""
     logger.info(f"Checkin started by user {update.effective_user.id}")
-    # Simpan chat_id grup (atau private chat) untuk balasan akhir
     context.user_data['original_chat_id'] = update.effective_chat.id
     update.message.reply_text("🏷️ Baik, mari kita mulai check-in Anda!\n"
                               "Mohon masukkan *Nama Lokasi*:",
@@ -226,319 +246,4 @@ def checkin_wilayah(update: Update, context: CallbackContext) -> int:
 
 @restricted
 def checkin_location(update: Update, context: CallbackContext) -> int:
-    """Menerima lokasi dan menyimpan semua data, lalu membalas di chat asal."""
-    user = update.effective_user
-    location = update.message.location
-    original_chat_id = context.user_data.get('original_chat_id', update.effective_chat.id)
-
-    if not location:
-        # Jika user tidak mengirim lokasi yang valid
-        context.bot.send_message(
-            chat_id=original_chat_id,
-            text="Mohon kirimkan lokasi Anda yang valid melalui fitur lokasi Telegram (bukan teks atau foto). Ketik /cancel untuk membatalkan."
-        )
-        return INPUT_LOCATION
-
-    latitude = location.latitude
-    longitude = location.longitude
-    
-    # Link Google Maps yang lebih kompatibel
-    Maps_link = f"http://maps.google.com/maps?q=loc:{latitude},{longitude}" 
-
-    nama_lokasi = context.user_data.get('nama_lokasi', 'N/A')
-    wilayah = context.user_data.get('wilayah', 'N/A')
-    timestamp_lokal = get_local_timestamp()
-
-    row_data = [
-        str(user.id),
-        user.first_name or '',
-        user.username or '',
-        timestamp_lokal,
-        nama_lokasi,
-        wilayah,
-        Maps_link
-    ]
-
-    try:
-        gsheet_client = init_gsheet()
-        # Asumsi sheet pertama adalah yang digunakan (index 0)
-        # Atau bisa pakai: sheet = gsheet_client.worksheet("NamaSheetAnda") 
-        sheet = gsheet_client.sheet1
-        sheet.append_row(row_data)
-        logger.info(f"Check-in recorded for {user.id} at {timestamp_lokal} - {nama_lokasi}, {wilayah}")
-        
-        # Kirim konfirmasi ke CHAT ASAL (grup atau private chat)
-        context.bot.send_message(
-            chat_id=original_chat_id,
-            text=(
-                "✅ Data check-in berhasil dicatat!\n\n"
-                f"👤 User: `{user.first_name or 'N/A'}` (`@{user.username}`)\n"
-                f"⏰ Waktu: `{timestamp_lokal}`\n"
-                f"🏷️ Nama Lokasi: *{nama_lokasi}*\n"
-                f"🌍 Wilayah: *{wilayah}*\n"
-                f"📍 Lokasi Google Maps: [Link Lokasi]({Maps_link})\n\n"
-                "Terima kasih!"
-            ),
-            parse_mode='Markdown',
-            disable_web_page_preview=True # Untuk menghindari preview link yang besar
-        )
-    except Exception as e:
-        logger.error(f"Gagal mencatat data check-in: {str(e)}")
-        # Kirim pesan error ke CHAT ASAL
-        context.bot.send_message(
-            chat_id=original_chat_id,
-            text="❌ Gagal mencatat data. Mohon coba lagi nanti. Detail error ada di log bot."
-        )
-
-    # Hapus data sementara dari user_data
-    context.user_data.clear() 
-    return ConversationHandler.END
-
-def cancel_conversation(update: Update, context: CallbackContext) -> int:
-    """Membatalkan percakapan check-in."""
-    original_chat_id = context.user_data.get('original_chat_id', update.effective_chat.id)
-    context.bot.send_message(chat_id=original_chat_id, text="Proses check-in dibatalkan.")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# ======================
-# MENU BOT (set_my_commands)
-# ======================
-def set_bot_commands_sync(dispatcher):
-    commands = [
-        BotCommand("start", "Mulai bot dan lihat sambutan"),
-        BotCommand("checkin", "Mulai proses check-in lokasi dan wilayah."),
-        BotCommand("menu", "Tampilkan daftar perintah bot ini"),
-        BotCommand("myid", "Lihat ID Telegram Anda"),
-        BotCommand("help", "Bantuan dan informasi bot"),
-        BotCommand("add_user", "Admin: Tambah pengguna terotorisasi"),
-        BotCommand("remove_user", "Admin: Hapus pengguna terotorisasi"),
-        BotCommand("list_users", "Admin: Daftar pengguna terotorisasi"),
-        BotCommand("add_admin", "Owner: Tambah admin"),
-        BotCommand("remove_admin", "Owner: Hapus admin"),
-        BotCommand("list_admins", "Owner: Daftar admin")
-    ]
-    
-    try:
-        success = dispatcher.bot.set_my_commands(commands)
-        if success:
-            logger.info("Bot commands have been set successfully.")
-        else:
-            logger.warning("Failed to set bot commands. Telegram API might return False.")
-    except Exception as e:
-        logger.error(f"Error setting bot commands: {e}")
-
-@restricted
-def show_menu(update: Update, context: CallbackContext):
-    msg = (
-        "Berikut adalah perintah yang bisa Anda gunakan:\n"
-        "/start - Memulai bot dan sambutan\n"
-        "/checkin - Memulai proses check-in lokasi dan wilayah\n"
-        "/menu - Menampilkan menu perintah ini\n"
-        "/myid - Melihat ID Telegram Anda\n"
-        "/help - Bantuan dan informasi bot\n\n"
-    )
-    user_id = update.effective_user.id
-    if is_admin(user_id):
-        msg += (
-            "--- Perintah Admin ---\n"
-            "/add_user <id> - Tambah pengguna terotorisasi\n"
-            "/remove_user <id> - Hapus pengguna terotorisasi\n"
-            "/list_users - Daftar pengguna terotorisasi\n"
-        )
-    if is_owner(user_id):
-        msg += (
-            "--- Perintah Owner ---\n"
-            "/add_admin <id> - Tambah admin\n"
-            "/remove_admin <id> - Hapus admin\n"
-            "/list_admins - Daftar admin\n"
-        )
-    update.message.reply_text(msg, parse_mode='Markdown')
-
-@restricted
-def my_id(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    update.message.reply_text(f"ID Telegram Anda adalah: `{user_id}`", parse_mode='Markdown')
-
-def help_command(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "Bot ini dirancang untuk memudahkan proses check-in sales dengan mencatat nama lokasi, wilayah, dan lokasi geografis ke Google Sheets.\n\n"
-        "Untuk memulai, ketik /checkin di grup atau private chat.\n"
-        "Saat diminta lokasi, kirimkan lokasi Anda secara manual dari fitur lampiran (📎 Lokasi).\n"
-        "Jika ada masalah, pastikan bot memiliki akses ke Google Sheets dan semua variabel lingkungan sudah diatur dengan benar."
-    )
-
-# ======================
-# COMMANDS UNTUK MANAJEMEN USER (ADMIN/OWNER ONLY)
-# ======================
-
-@owner_restricted
-def add_admin(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Penggunaan: /add_admin <user_id>")
-        return
-    try:
-        new_admin_id = int(context.args[0])
-        if new_admin_id == OWNER_ID:
-            update.message.reply_text(f"User ID {new_admin_id} adalah Owner, tidak perlu ditambahkan sebagai Admin.")
-        elif new_admin_id in ADMIN_IDS:
-            update.message.reply_text(f"User ID {new_admin_id} sudah menjadi Admin.")
-        else:
-            ADMIN_IDS.append(new_admin_id)
-            update.message.reply_text(f"User ID {new_admin_id} berhasil ditambahkan sebagai Admin.")
-            logger.info(f"User {new_admin_id} added as Admin by {update.effective_user.id}")
-    except ValueError:
-        update.message.reply_text("User ID harus berupa angka.")
-
-@owner_restricted
-def remove_admin(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Penggunaan: /remove_admin <user_id>")
-        return
-    try:
-        admin_to_remove = int(context.args[0])
-        if admin_to_remove == OWNER_ID:
-             update.message.reply_text(f"Owner tidak bisa dihapus dari daftar Admin.")
-        elif admin_to_remove in ADMIN_IDS:
-            ADMIN_IDS.remove(admin_to_remove)
-            update.message.reply_text(f"User ID {admin_to_remove} berhasil dihapus dari daftar Admin.")
-            logger.info(f"User {admin_to_remove} removed from Admin by {update.effective_user.id}")
-        else:
-            update.message.reply_text(f"User ID {admin_to_remove} bukan Admin.")
-    except ValueError:
-        update.message.reply_text("User ID harus berupa angka.")
-
-@admin_restricted
-def add_user(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Penggunaan: /add_user <user_id>")
-        return
-    try:
-        new_user_id = int(context.args[0])
-        if is_admin(new_user_id):
-            update.message.reply_text(f"User ID {new_user_id} adalah Admin/Owner, sudah otomatis terotorisasi.")
-        elif new_user_id in AUTHORIZED_USER_IDS:
-            update.message.reply_text(f"User ID {new_user_id} sudah menjadi Pengguna Terotorisasi.")
-        else:
-            AUTHORIZED_USER_IDS.append(new_user_id)
-            update.message.reply_text(f"User ID {new_user_id} berhasil ditambahkan sebagai Pengguna Terotorisasi.")
-            logger.info(f"User {new_user_id} added as Authorized User by {update.effective_user.id}")
-    except ValueError:
-        update.message.reply_text("User ID harus berupa angka.")
-
-@admin_restricted
-def remove_user(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Penggunaan: /remove_user <user_id>")
-        return
-    try:
-        user_to_remove = int(context.args[0])
-        if is_admin(user_to_remove):
-            update.message.reply_text(f"User ID {user_to_remove} adalah Admin/Owner, tidak bisa dihapus dari daftar pengguna terotorisasi secara langsung.")
-        elif user_to_remove in AUTHORIZED_USER_IDS:
-            AUTHORIZED_USER_IDS.remove(user_to_remove)
-            update.message.reply_text(f"User ID {user_to_remove} berhasil dihapus dari daftar Pengguna Terotorisasi.")
-            logger.info(f"User {user_to_remove} removed from Authorized User by {update.effective_user.id}")
-        else:
-            update.message.reply_text(f"User ID {user_to_remove} bukan Pengguna Terotorisasi.")
-    except ValueError:
-        update.message.reply_text("User ID harus berupa angka.")
-
-@admin_restricted
-def list_users(update: Update, context: CallbackContext):
-    msg = "Daftar User Terotorisasi (Diluar Owner/Admin):\n"
-    if AUTHORIZED_USER_IDS:
-        for uid in AUTHORIZED_USER_IDS:
-            msg += f"- `{uid}`\n"
-    else:
-        msg += "Tidak ada user terotorisasi yang ditambahkan secara manual."
-    update.message.reply_text(msg, parse_mode='Markdown')
-
-@owner_restricted
-def list_admins(update: Update, context: CallbackContext):
-    msg = "Daftar Admin (Diluar Owner):\n"
-    if ADMIN_IDS:
-        for uid in ADMIN_IDS:
-            msg += f"- `{uid}`\n"
-    else:
-        msg += "Tidak ada admin yang ditambahkan secara manual."
-    update.message.reply_text(msg, parse_mode='Markdown')
-
-
-# ======================
-# MAIN APPLICATION LOGIC
-# ======================
-def main():
-    try:
-        logger.info("Starting bot initialization...")
-        
-        required_vars = [
-            'TELEGRAM_TOKEN', 'GSHEET_PRIVATE_KEY', 'GSHEET_CLIENT_EMAIL',
-            'SHEET_URL', 'WEBHOOK_HOST', 'OWNER_ID'
-        ]
-        
-        for var in required_vars:
-            if not os.getenv(var):
-                raise ValueError(f"Missing required environment variable: {var}")
-        
-        set_bot_commands_sync(dispatcher)
-
-        dispatcher.add_handler(CommandHandler("start", start_command))
-        dispatcher.add_handler(CommandHandler("menu", show_menu))
-        dispatcher.add_handler(CommandHandler("myid", my_id))
-        dispatcher.add_handler(CommandHandler("help", help_command))
-
-        dispatcher.add_handler(CommandHandler("add_admin", add_admin))
-        dispatcher.add_handler(CommandHandler("remove_admin", remove_admin))
-        dispatcher.add_handler(CommandHandler("list_admins", list_admins))
-        dispatcher.add_handler(CommandHandler("add_user", add_user))
-        dispatcher.add_handler(CommandHandler("remove_user", remove_user))
-        dispatcher.add_handler(CommandHandler("list_users", list_users))
-        
-        # Conversation Handler untuk check-in
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('checkin', checkin_start)],
-            states={
-                INPUT_NAMA_LOKASI: [MessageHandler(Filters.text & ~Filters.command, checkin_nama_lokasi)],
-                INPUT_WILAYAH: [MessageHandler(Filters.text & ~Filters.command, checkin_wilayah)],
-                # Menerima lokasi dari semua jenis chat (private/group)
-                INPUT_LOCATION: [MessageHandler(Filters.location & ~Filters.command, checkin_location)], 
-            },
-            fallbacks=[CommandHandler('cancel', cancel_conversation)],
-            allow_reentry=True # Izinkan user memulai ulang conversation jika macet
-        )
-        dispatcher.add_handler(conv_handler)
-        
-        logger.info(f"Bot configured for webhook. Listening on {WEBHOOK_HOST}:{PORT}/{WEBHOOK_PATH}")
-
-    except Exception as e:
-        logger.critical(f"Bot crashed during initialization: {str(e)}")
-        raise
-
-# ======================
-# ROUTE FLASK UNTUK MENERIMA WEBHOOK
-# ======================
-@app.route(f'/{WEBHOOK_PATH}', methods=['POST'])
-def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), dispatcher.bot)
-        dispatcher.process_update(update)
-    return "ok"
-
-# ======================
-# HEALTH CHECK ENDPOINT UNTUK KOYEB
-# ======================
-@app.route('/healthz', methods=['GET'])
-def health_check():
-    return "OK", 200
-
-# ======================
-# START FLASK SERVER
-# ======================
-if __name__ == '__main__':
-    main()
-    logger.info(f"Starting Flask server on host 0.0.0.0, port {PORT}") 
-    try:
-        app.run(host="0.0.0.0", port=PORT)
-    except Exception as e:
-        logger.critical(f"Flask server crashed: {e}")
+    """Menerima lokasi dan menyimpan
