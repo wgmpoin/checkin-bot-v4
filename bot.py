@@ -11,6 +11,7 @@ from telegram.ext import (
     ConversationHandler,
     CallbackContext,
 )
+import json # <--- PASTIKAN INI ADA
 
 # Set up logging
 logging.basicConfig(
@@ -25,16 +26,21 @@ LOCATION, AREA, CONFIRM, WAITING_LOCATION = range(4)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 GSHEET_SPREADSHEET_ID = os.getenv("GSHEET_SPREADSHEET_ID")
-GSHEET_CLIENT_EMAIL = os.getenv("GSHEET_CLIENT_EMAIL")
-GSHEET_PRIVATE_KEY = os.getenv("GSHEET_PRIVATE_KEY").replace("\\n", "\n")
+# Hapus baris ini: GSHEET_CLIENT_EMAIL = os.getenv("GSHEET_CLIENT_EMAIL")
+# Hapus baris ini: GSHEET_PRIVATE_KEY = os.getenv("GSHEET_PRIVATE_KEY").replace("\\n", "\n")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") # For Render deployment
 
 # Initialize Google Sheets
 try:
-    gc = gspread.service_account_from_dict({
-        "private_key": GSHEET_PRIVATE_KEY,
-        "client_email": GSHEET_CLIENT_EMAIL,
-    })
+    # Load credentials from the single GOOGLE_SERVICE_ACCOUNT_CREDENTIALS env var
+    creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")
+    if not creds_json:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS environment variable is not set.")
+
+    # Parse the JSON string into a Python dictionary
+    creds_dict = json.loads(creds_json)
+
+    gc = gspread.service_account_from_dict(creds_dict)
     spreadsheet = gc.open_by_id(GSHEET_SPREADSHEET_ID)
     checkin_sheet = spreadsheet.worksheet("Check-Ins")
     users_sheet = spreadsheet.worksheet("Users")
@@ -45,8 +51,6 @@ except Exception as e:
     raise
 
 # User Roles Management (cached)
-# NOTE: user_roles masih ada karena dipakai untuk fungsionalitas add_user/admin,
-# tapi tidak akan membatasi akses menu atau perintah secara otomatis lagi.
 user_roles = {}
 
 def load_user_roles():
@@ -64,10 +68,6 @@ def load_user_roles():
 load_user_roles()
 
 # --- Command Handlers ---
-
-# Semua fungsi perintah sekarang tidak lagi menggunakan decorator @registered_user_only, @admin_or_owner, dll.
-# Ini berarti semua user (termasuk yang belum terdaftar di Google Sheet) bisa mencoba perintah ini.
-# Namun, perintah add_admin/add_user/list_users akan tetap memeriksa role di dalam fungsinya sendiri.
 
 def start(update: Update, context: CallbackContext) -> None:
     """Sends a welcome message and prompts for check-in."""
@@ -90,7 +90,7 @@ def show_menu(update: Update, context: CallbackContext) -> None:
     msg += "*/add_admin <user_id>* - Menambahkan user sebagai admin.\n"
     msg += "*/add_user <user_id>* - Menambahkan user biasa.\n"
     msg += "*/list_users* - Melihat daftar user terdaftar.\n"
-    
+
     update.message.reply_text(msg, parse_mode='Markdown')
 
 def my_id(update: Update, context: CallbackContext) -> None:
@@ -110,20 +110,17 @@ def contact(update: Update, context: CallbackContext) -> None:
     """Displays important contact information."""
     msg = "*Perintah:* /kontak\n\n"
     msg += "*Hotline Bebas Pulsa:* [08001119999](tel:+628001119999)\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
     msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n" 
     msg += "*Email Support:* [support@mpoin.com](mailto:support@mpoin.com)\n\n"
-    
+
     msg += "*PELAPORAN PELANGGARAN*\n"
     msg += "Laporkan kepada Internal Audit secara jelas & lengkap melalui:\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
     msg += "[+62 812 3445 0505](tel:+6281234450505) | " 
     msg += "[+62 822 2909 3495](tel:+6282229093495) | "
     msg += "[+62 822 2930 9341](tel:+6282229309341)\n"
     msg += "*Email Pengaduan:* [pengaduanmpoin@gmail.com](mailto:pengaduanmpoin@gmail.com)\n\n"
 
     msg += "*HRD*\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
     msg += "[+6281228328631](tel:+6281228328631)\n"
     msg += "*Email HRD:* [hrdepartment@mpoin.com](mailto:hrdepartment@mpoin.com)\n\n"
 
@@ -138,13 +135,11 @@ def contact(update: Update, context: CallbackContext) -> None:
 
 # --- Check-in Conversation Handlers ---
 
-# checkin_start juga diubah agar siapa saja bisa memulai, tapi tetap menyimpan data lengkap.
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Starts the check-in conversation."""
     user_id = update.effective_user.id
     user_info = user_roles.get(str(user_id))
-    
-    # Pesan awal tidak lagi memeriksa izin, tapi pastikan data user tetap dicatat.
+
     context.user_data['user_id'] = user_id
     context.user_data['first_name'] = update.effective_user.first_name or "N/A"
     context.user_data['last_name'] = update.effective_user.last_name or ""
@@ -206,7 +201,7 @@ def checkin_receive_location(update: Update, context: CallbackContext) -> int:
         except Exception as e:
             logger.error(f"Error recording check-in: {e}")
             update.message.reply_text("Terjadi kesalahan saat menyimpan data check-in Anda. Mohon coba lagi.")
-        
+
         return ConversationHandler.END
     else:
         update.message.reply_text("Mohon kirimkan lokasi Anda menggunakan fitur 'Lokasi' di Telegram.")
@@ -218,10 +213,6 @@ def checkin_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # --- User Management Handlers ---
-
-# Fungsi add_user, add_admin, dan list_users tetap ada,
-# tetapi hanya owner/admin yang bisa melaksanakannya (cek di dalam fungsi).
-# Ini penting karena data user_roles masih digunakan oleh bot itu sendiri.
 
 def add_user_command(update: Update, context: CallbackContext) -> None:
     """Adds a new user to the Google Sheet with 'user' role."""
@@ -238,7 +229,7 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         return
 
     target_user_id = context.args[0]
-    
+
     target_user_tg_info = None
     try:
         target_user_tg_info = context.bot.get_chat(target_user_id) 
@@ -252,7 +243,7 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         adder_id = update.effective_user.id
         adder_name = update.effective_user.full_name
-        
+
         if target_user_id in user_roles:
             update.message.reply_text(f"User dengan ID {target_user_id} sudah terdaftar sebagai {user_roles[target_user_id]['role']}.")
             return
@@ -282,7 +273,7 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
         return
 
     target_user_id = context.args[0]
-    
+
     target_user_tg_info = None
     try:
         target_user_tg_info = context.bot.get_chat(target_user_id) 
@@ -345,12 +336,12 @@ def list_users_command(update: Update, context: CallbackContext) -> None:
         role = user_info.get('role', 'N/A')
         full_name = user_info.get('first_name', 'N/A')
         username = user_info.get('username', 'N/A')
-        
+
         msg += f"- *ID:* `{user_id}`\n"
         msg += f"  *Nama:* {full_name}\n"
         msg += f"  *Username:* @{username}\n"
         msg += f"  *Peran:* `{role}`\n\n"
-    
+
     update.message.reply_text(msg, parse_mode='Markdown')
 
 
@@ -399,9 +390,9 @@ def main() -> None:
         PORT = int(os.environ.get('PORT', '10000')) # Render default port is 10000
         webhook_url = f"{WEBHOOK_HOST}/{TELEGRAM_BOT_TOKEN}"
         updater.start_webhook(listen="0.0.0.0",
-                              port=PORT,
-                              url_path=TELEGRAM_BOT_TOKEN,
-                              webhook_url=webhook_url)
+                            port=PORT,
+                            url_path=TELEGRAM_BOT_TOKEN,
+                            webhook_url=webhook_url)
         logger.info(f"Bot configured for webhook. Listening on {webhook_url}")
     else:
         logger.info("Bot configured for polling.")
