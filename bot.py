@@ -161,27 +161,27 @@ def contact(update: Update, context: CallbackContext) -> None:
     """Displays important contact information."""
     msg = "*Perintah:* /kontak\n\n"
     msg += "*Hotline Bebas Pulsa:* [08001119999](tel:+628001119999)\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
-    msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n" 
+    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
+    msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n"
     msg += "*Email Support:* [support@mpoin.com](mailto:support@mpoin.com)\n\n"
     
     msg += "*PELAPORAN PELANGGARAN*\n"
     msg += "Laporkan kepada Internal Audit secara jelas & lengkap melalui:\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
-    msg += "[+62 812 3445 0505](tel:+6281234450505) | " 
+    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
+    msg += "[+62 812 3445 0505](tel:+6281234450505) | "
     msg += "[+62 822 2909 3495](tel:+6282229093495) | "
     msg += "[+62 822 2930 9341](tel:+6282229309341)\n"
     msg += "*Email Pengaduan:* [pengaduanmpoin@gmail.com](mailto:pengaduanmpoin@gmail.com)\n\n"
 
     msg += "*HRD*\n"
-    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
+    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
     msg += "[+6281228328631](tel:+6281228328631)\n"
     msg += "*Email HRD:* [hrdepartment@mpoin.com](mailto:hrdepartment@mpoin.com)\n\n"
 
     msg += "*Sosial Media:*\n"
-    msg += "Tiktok: @mpoin.id\n" # Tidak ada format link khusus untuk TikTok username, jadi teks biasa
+    msg += "Tiktok: @mpoin.id\n"
     msg += "IG: [@mpoinpipaku.id](https://www.instagram.com/mpoinpipaku.id)\n"
-    msg += "FB: Mpoinpipakuid\n" # Tidak ada format link khusus untuk FB page name, jadi teks biasa
+    msg += "FB: Mpoinpipakuid\n"
     msg += "Website: [www.mpoin.com](https://mpoin.com)"
 
     update.message.reply_text(msg, parse_mode='Markdown')
@@ -287,7 +287,7 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
     try:
         # This will only work if the bot has already interacted with the user or is in a group with them
         # And even then, it might not fetch full details without specific permissions or if user is private
-        target_user_tg_info = context.bot.get_chat(target_user_id) 
+        target_user_tg_info = context.bot.get_chat(target_user_id)
     except Exception as e:
         logger.warning(f"Could not fetch info for user ID {target_user_id}: {e}")
 
@@ -325,7 +325,7 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
     
     target_user_tg_info = None
     try:
-        target_user_tg_info = context.bot.get_chat(target_user_id) 
+        target_user_tg_info = context.bot.get_chat(target_user_id)
     except Exception as e:
         logger.warning(f"Could not fetch info for user ID {target_user_id}: {e}")
 
@@ -423,7 +423,7 @@ def main() -> None:
     dispatcher.add_handler(CommandHandler("menu", show_menu))
     dispatcher.add_handler(CommandHandler("myid", my_id))
     dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("kontak", contact)) # New contact command
+    dispatcher.add_handler(CommandHandler("kontak", contact))
     dispatcher.add_handler(CommandHandler("add_user", add_user_command))
     dispatcher.add_handler(CommandHandler("add_admin", add_admin_command))
     dispatcher.add_handler(CommandHandler("list_users", list_users_command))
