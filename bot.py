@@ -11,7 +11,7 @@ from telegram.ext import (
     ConversationHandler,
     CallbackContext,
 )
-import json # <--- PASTIKAN INI ADA
+import json
 
 # Set up logging
 logging.basicConfig(
@@ -26,8 +26,6 @@ LOCATION, AREA, CONFIRM, WAITING_LOCATION = range(4)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 GSHEET_SPREADSHEET_ID = os.getenv("GSHEET_SPREADSHEET_ID")
-# Hapus baris ini: GSHEET_CLIENT_EMAIL = os.getenv("GSHEET_CLIENT_EMAIL")
-# Hapus baris ini: GSHEET_PRIVATE_KEY = os.getenv("GSHEET_PRIVATE_KEY").replace("\\n", "\n")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") # For Render deployment
 
 # Initialize Google Sheets
@@ -36,18 +34,18 @@ try:
     creds_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")
     if not creds_json:
         raise ValueError("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS environment variable is not set.")
-
+    
     # Parse the JSON string into a Python dictionary
     creds_dict = json.loads(creds_json)
-
+    
     gc = gspread.service_account_from_dict(creds_dict)
-    spreadsheet = gc.open_by_id(GSHEET_SPREADSHEET_ID)
+    # PERBAIKAN DI BARIS INI: Gunakan gc.open_by_key() bukan gc.open_by_id()
+    spreadsheet = gc.open_by_key(GSHEET_SPREADSHEET_ID)
     checkin_sheet = spreadsheet.worksheet("Check-Ins")
     users_sheet = spreadsheet.worksheet("Users")
     logger.info("Successfully connected to Google Sheets.")
 except Exception as e:
     logger.error(f"Error connecting to Google Sheets: {e}")
-    # Exit or handle gracefully in production
     raise
 
 # User Roles Management (cached)
@@ -90,7 +88,7 @@ def show_menu(update: Update, context: CallbackContext) -> None:
     msg += "*/add_admin <user_id>* - Menambahkan user sebagai admin.\n"
     msg += "*/add_user <user_id>* - Menambahkan user biasa.\n"
     msg += "*/list_users* - Melihat daftar user terdaftar.\n"
-
+    
     update.message.reply_text(msg, parse_mode='Markdown')
 
 def my_id(update: Update, context: CallbackContext) -> None:
@@ -112,7 +110,7 @@ def contact(update: Update, context: CallbackContext) -> None:
     msg += "*Hotline Bebas Pulsa:* [08001119999](tel:+628001119999)\n"
     msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n" 
     msg += "*Email Support:* [support@mpoin.com](mailto:support@mpoin.com)\n\n"
-
+    
     msg += "*PELAPORAN PELANGGARAN*\n"
     msg += "Laporkan kepada Internal Audit secara jelas & lengkap melalui:\n"
     msg += "[+62 812 3445 0505](tel:+6281234450505) | " 
@@ -139,7 +137,7 @@ def checkin_start(update: Update, context: CallbackContext) -> int:
     """Starts the check-in conversation."""
     user_id = update.effective_user.id
     user_info = user_roles.get(str(user_id))
-
+    
     context.user_data['user_id'] = user_id
     context.user_data['first_name'] = update.effective_user.first_name or "N/A"
     context.user_data['last_name'] = update.effective_user.last_name or ""
@@ -201,7 +199,7 @@ def checkin_receive_location(update: Update, context: CallbackContext) -> int:
         except Exception as e:
             logger.error(f"Error recording check-in: {e}")
             update.message.reply_text("Terjadi kesalahan saat menyimpan data check-in Anda. Mohon coba lagi.")
-
+        
         return ConversationHandler.END
     else:
         update.message.reply_text("Mohon kirimkan lokasi Anda menggunakan fitur 'Lokasi' di Telegram.")
@@ -229,7 +227,7 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         return
 
     target_user_id = context.args[0]
-
+    
     target_user_tg_info = None
     try:
         target_user_tg_info = context.bot.get_chat(target_user_id) 
@@ -243,7 +241,7 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         adder_id = update.effective_user.id
         adder_name = update.effective_user.full_name
-
+        
         if target_user_id in user_roles:
             update.message.reply_text(f"User dengan ID {target_user_id} sudah terdaftar sebagai {user_roles[target_user_id]['role']}.")
             return
@@ -273,7 +271,7 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
         return
 
     target_user_id = context.args[0]
-
+    
     target_user_tg_info = None
     try:
         target_user_tg_info = context.bot.get_chat(target_user_id) 
@@ -336,12 +334,12 @@ def list_users_command(update: Update, context: CallbackContext) -> None:
         role = user_info.get('role', 'N/A')
         full_name = user_info.get('first_name', 'N/A')
         username = user_info.get('username', 'N/A')
-
+        
         msg += f"- *ID:* `{user_id}`\n"
         msg += f"  *Nama:* {full_name}\n"
         msg += f"  *Username:* @{username}\n"
         msg += f"  *Peran:* `{role}`\n\n"
-
+    
     update.message.reply_text(msg, parse_mode='Markdown')
 
 
@@ -390,9 +388,9 @@ def main() -> None:
         PORT = int(os.environ.get('PORT', '10000')) # Render default port is 10000
         webhook_url = f"{WEBHOOK_HOST}/{TELEGRAM_BOT_TOKEN}"
         updater.start_webhook(listen="0.0.0.0",
-                            port=PORT,
-                            url_path=TELEGRAM_BOT_TOKEN,
-                            webhook_url=webhook_url)
+                              port=PORT,
+                              url_path=TELEGRAM_BOT_TOKEN,
+                              webhook_url=webhook_url)
         logger.info(f"Bot configured for webhook. Listening on {webhook_url}")
     else:
         logger.info("Bot configured for polling.")
