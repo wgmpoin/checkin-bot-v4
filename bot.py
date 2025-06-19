@@ -45,6 +45,8 @@ except Exception as e:
     raise
 
 # User Roles Management (cached)
+# NOTE: user_roles masih ada karena dipakai untuk fungsionalitas add_user/admin,
+# tapi tidak akan membatasi akses menu atau perintah secara otomatis lagi.
 user_roles = {}
 
 def load_user_roles():
@@ -61,46 +63,12 @@ def load_user_roles():
 # Load roles on startup
 load_user_roles()
 
-# --- Decorators for Authorization ---
-def auth_decorator(allowed_roles=None):
-    """
-    Decorator to check if a user has the required role to access a command.
-    If no allowed_roles are specified, any registered user can access.
-    """
-    if allowed_roles is None:
-        allowed_roles = ['owner', 'admin', 'user'] # Default: all registered users
-
-    def decorator(func):
-        def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-            user_id = str(update.effective_user.id)
-            user_info = user_roles.get(user_id)
-            user_role = user_info['role'] if user_info else None
-
-            if user_role in allowed_roles:
-                return func(update, context, *args, **kwargs)
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_id} ({update.effective_user.username or update.effective_user.full_name}) for command /{func.__name__}"
-                )
-                if user_role: # Registered but unauthorized for this command
-                    update.message.reply_text("Maaf, Anda tidak memiliki izin untuk mengakses perintah ini.")
-                else: # Not registered at all
-                    update.message.reply_text("👋 Halo! Saya Bot Check-in.\nAnda belum terdaftar. Silakan hubungi admin Anda untuk mendapatkan akses.")
-        return wrapper
-    return decorator
-
-def owner_only(func):
-    return auth_decorator(['owner'])(func)
-
-def admin_or_owner(func):
-    return auth_decorator(['owner', 'admin'])(func)
-
-def registered_user_only(func):
-    return auth_decorator(['owner', 'admin', 'user'])(func)
-
 # --- Command Handlers ---
 
-@registered_user_only
+# Semua fungsi perintah sekarang tidak lagi menggunakan decorator @registered_user_only, @admin_or_owner, dll.
+# Ini berarti semua user (termasuk yang belum terdaftar di Google Sheet) bisa mencoba perintah ini.
+# Namun, perintah add_admin/add_user/list_users akan tetap memeriksa role di dalam fungsinya sendiri.
+
 def start(update: Update, context: CallbackContext) -> None:
     """Sends a welcome message and prompts for check-in."""
     msg = "👋 Halo! Saya Bot Check-in.\n"
@@ -109,45 +77,27 @@ def start(update: Update, context: CallbackContext) -> None:
     msg += "/menu - Tampilkan menu perintah."
     update.message.reply_text(msg)
 
-@registered_user_only
 def show_menu(update: Update, context: CallbackContext) -> None:
-    """Displays the menu based on user role."""
-    user_id = str(update.effective_user.id)
-    user_info = user_roles.get(user_id)
-    user_role = user_info['role'] if user_info else None
-
-    if user_role == 'owner' or user_role == 'admin':
-        msg = "Berikut adalah perintah yang bisa Anda gunakan:\n\n"
-        msg += "*/start* - Memulai bot dan sambutan\n"
-        msg += "*/checkin* - Memulai proses check-in lokasi dan wilayah\n"
-        msg += "*/menu* - Menampilkan menu perintah ini\n"
-        msg += "*/myid* - Melihat ID Telegram Anda\n"
-        msg += "*/kontak* - Menampilkan informasi kontak penting\n"
-        msg += "*/help* - Bantuan dan informasi bot\n\n"
-        msg += "*Perintah Admin & Owner:*\n"
-        msg += "*/add_admin <user_id>* - Menambahkan user sebagai admin\n"
-        msg += "*/add_user <user_id>* - Menambahkan user biasa\n"
-        msg += "*/list_users* - Melihat daftar user terdaftar\n"
-    elif user_role == 'user':
-        msg = "Berikut adalah perintah yang bisa Anda gunakan:\n\n"
-        msg += "*/start* - Memulai bot dan sambutan\n"
-        msg += "*/checkin* - Memulai proses check-in lokasi dan wilayah\n"
-        msg += "*/menu* - Menampilkan menu perintah ini\n"
-        msg += "*/myid* - Melihat ID Telegram Anda\n"
-        msg += "*/kontak* - Menampilkan informasi kontak penting\n"
-        msg += "*/help* - Bantuan dan informasi bot\n"
-    else: # Fallback for unregistered users trying to access menu
-        msg = "👋 Halo! Saya Bot Check-in.\nAnda belum terdaftar. Silakan hubungi admin Anda untuk mendapatkan akses."
+    """Displays the full menu for all users."""
+    msg = "Berikut adalah perintah yang bisa Anda gunakan:\n\n"
+    msg += "*/start* - Memulai bot dan sambutan\n"
+    msg += "*/checkin* - Memulai proses check-in lokasi dan wilayah.\n"
+    msg += "*/menu* - Menampilkan menu perintah ini.\n"
+    msg += "*/myid* - Melihat ID Telegram Anda.\n"
+    msg += "*/kontak* - Menampilkan informasi kontak penting.\n"
+    msg += "*/help* - Bantuan dan informasi bot.\n\n"
+    msg += "*Perintah Admin & Owner (Walaupun Terlihat, Hanya Bisa Dilakukan oleh yang Berhak):*\n"
+    msg += "*/add_admin <user_id>* - Menambahkan user sebagai admin.\n"
+    msg += "*/add_user <user_id>* - Menambahkan user biasa.\n"
+    msg += "*/list_users* - Melihat daftar user terdaftar.\n"
     
     update.message.reply_text(msg, parse_mode='Markdown')
 
-@registered_user_only
 def my_id(update: Update, context: CallbackContext) -> None:
     """Sends the user's Telegram ID."""
     user_id = update.effective_user.id
     update.message.reply_text(f"ID Telegram Anda: `{user_id}`", parse_mode='Markdown')
 
-@registered_user_only
 def help_command(update: Update, context: CallbackContext) -> None:
     """Sends a help message."""
     update.message.reply_text(
@@ -156,25 +106,24 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "Untuk melihat semua perintah yang tersedia, gunakan /menu."
     )
 
-@registered_user_only
 def contact(update: Update, context: CallbackContext) -> None:
     """Displays important contact information."""
     msg = "*Perintah:* /kontak\n\n"
     msg += "*Hotline Bebas Pulsa:* [08001119999](tel:+628001119999)\n"
-    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
-    msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n"
+    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
+    msg += "*Hotline:* [+6281231447777](tel:+6281231447777) (Kontak Telegram)\n" 
     msg += "*Email Support:* [support@mpoin.com](mailto:support@mpoin.com)\n\n"
     
     msg += "*PELAPORAN PELANGGARAN*\n"
     msg += "Laporkan kepada Internal Audit secara jelas & lengkap melalui:\n"
-    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
-    msg += "[+62 812 3445 0505](tel:+6281234450505) | "
+    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
+    msg += "[+62 812 3445 0505](tel:+6281234450505) | " 
     msg += "[+62 822 2909 3495](tel:+6282229093495) | "
     msg += "[+62 822 2930 9341](tel:+6282229309341)\n"
     msg += "*Email Pengaduan:* [pengaduanmpoin@gmail.com](mailto:pengaduanmpoin@gmail.com)\n\n"
 
     msg += "*HRD*\n"
-    # Menggunakan link tel: atau teks biasa untuk nomor Telegram karena ID belum tersedia
+    # Sementara ini, gunakan link tel: atau teks biasa untuk nomor Telegram
     msg += "[+6281228328631](tel:+6281228328631)\n"
     msg += "*Email HRD:* [hrdepartment@mpoin.com](mailto:hrdepartment@mpoin.com)\n\n"
 
@@ -189,16 +138,13 @@ def contact(update: Update, context: CallbackContext) -> None:
 
 # --- Check-in Conversation Handlers ---
 
-@registered_user_only
+# checkin_start juga diubah agar siapa saja bisa memulai, tapi tetap menyimpan data lengkap.
 def checkin_start(update: Update, context: CallbackContext) -> int:
     """Starts the check-in conversation."""
     user_id = update.effective_user.id
     user_info = user_roles.get(str(user_id))
     
-    if not user_info or user_info['role'] not in ['owner', 'admin', 'user']:
-        update.message.reply_text("Maaf, Anda tidak memiliki izin untuk melakukan check-in. Silakan hubungi admin.")
-        return ConversationHandler.END
-
+    # Pesan awal tidak lagi memeriksa izin, tapi pastikan data user tetap dicatat.
     context.user_data['user_id'] = user_id
     context.user_data['first_name'] = update.effective_user.first_name or "N/A"
     context.user_data['last_name'] = update.effective_user.last_name or ""
@@ -273,21 +219,29 @@ def checkin_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- User Management Handlers ---
 
-@admin_or_owner
+# Fungsi add_user, add_admin, dan list_users tetap ada,
+# tetapi hanya owner/admin yang bisa melaksanakannya (cek di dalam fungsi).
+# Ini penting karena data user_roles masih digunakan oleh bot itu sendiri.
+
 def add_user_command(update: Update, context: CallbackContext) -> None:
     """Adds a new user to the Google Sheet with 'user' role."""
+    user_id = str(update.effective_user.id)
+    user_info = user_roles.get(user_id)
+    user_role = user_info['role'] if user_info else None
+
+    if user_role not in ['owner', 'admin']:
+        update.message.reply_text("Maaf, Anda tidak memiliki izin untuk mengakses perintah ini.")
+        return
+
     if not context.args or not context.args[0].isdigit():
         update.message.reply_text("Penggunaan: /add_user <user_id>")
         return
 
     target_user_id = context.args[0]
     
-    # Optional: Get user info from Telegram if bot has chatted with them
     target_user_tg_info = None
     try:
-        # This will only work if the bot has already interacted with the user or is in a group with them
-        # And even then, it might not fetch full details without specific permissions or if user is private
-        target_user_tg_info = context.bot.get_chat(target_user_id)
+        target_user_tg_info = context.bot.get_chat(target_user_id) 
     except Exception as e:
         logger.warning(f"Could not fetch info for user ID {target_user_id}: {e}")
 
@@ -299,7 +253,6 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         adder_id = update.effective_user.id
         adder_name = update.effective_user.full_name
         
-        # Check if user already exists
         if target_user_id in user_roles:
             update.message.reply_text(f"User dengan ID {target_user_id} sudah terdaftar sebagai {user_roles[target_user_id]['role']}.")
             return
@@ -314,9 +267,16 @@ def add_user_command(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error managing user role: {target_user_id} - {e}")
         update.message.reply_text(f"Terjadi kesalahan saat mencoba menambahkan user. Mohon coba lagi. Detail: {e}")
 
-@admin_or_owner
 def add_admin_command(update: Update, context: CallbackContext) -> None:
     """Adds a new user to the Google Sheet with 'admin' role."""
+    user_id = str(update.effective_user.id)
+    user_info = user_roles.get(user_id)
+    user_role = user_info['role'] if user_info else None
+
+    if user_role not in ['owner', 'admin']:
+        update.message.reply_text("Maaf, Anda tidak memiliki izin untuk mengakses perintah ini.")
+        return
+
     if not context.args or not context.args[0].isdigit():
         update.message.reply_text("Penggunaan: /add_admin <user_id>")
         return
@@ -325,7 +285,7 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
     
     target_user_tg_info = None
     try:
-        target_user_tg_info = context.bot.get_chat(target_user_id)
+        target_user_tg_info = context.bot.get_chat(target_user_id) 
     except Exception as e:
         logger.warning(f"Could not fetch info for user ID {target_user_id}: {e}")
 
@@ -337,21 +297,18 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
         adder_id = update.effective_user.id
         adder_name = update.effective_user.full_name
 
-        # Check if user already exists or is higher role
         if target_user_id in user_roles:
             existing_role = user_roles[target_user_id]['role']
             if existing_role == 'owner' or existing_role == 'admin':
                 update.message.reply_text(f"User {target_user_id} sudah terdaftar sebagai {existing_role}.")
                 return
             else: # Update existing user to admin
-                # This part requires finding and updating a row, not just appending.
-                # A more robust solution would be to use find_all and update_cells.
-                cell = users_sheet.find(target_user_id) # Find the cell with the user_id
+                cell = users_sheet.find(target_user_id)
                 if cell:
                     row_index = cell.row
-                    users_sheet.update_cell(row_index, users_sheet.find('role').col, 'admin') # Update 'role' column
+                    users_sheet.update_cell(row_index, users_sheet.find('role').col, 'admin')
                     update.message.reply_text(f"Peran user {first_name} ({target_user_id}) berhasil diubah menjadi *admin*.", parse_mode='Markdown')
-                else: # Should not happen if target_user_id is in user_roles
+                else: 
                     users_sheet.append_row([
                         target_user_id, 'admin', first_name, username, str(adder_id), adder_name, current_time
                     ])
@@ -369,9 +326,16 @@ def add_admin_command(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error managing user role: {target_user_id} - {e}")
         update.message.reply_text(f"Terjadi kesalahan saat mencoba menambahkan admin. Mohon coba lagi. Detail: {e}")
 
-@admin_or_owner
 def list_users_command(update: Update, context: CallbackContext) -> None:
     """Lists all registered users and their roles."""
+    user_id = str(update.effective_user.id)
+    user_info = user_roles.get(user_id)
+    user_role = user_info['role'] if user_info else None
+
+    if user_role not in ['owner', 'admin']:
+        update.message.reply_text("Maaf, Anda tidak memiliki izin untuk mengakses perintah ini.")
+        return
+
     if not user_roles:
         update.message.reply_text("Belum ada user terdaftar.")
         return
@@ -393,7 +357,6 @@ def list_users_command(update: Update, context: CallbackContext) -> None:
 def error_handler(update: Update, context: CallbackContext) -> None:
     """Log the error and send a telegram message to notify the developer."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    # This sends an error message to the user, you might want to customize or remove this for production
     if update.effective_message:
         update.effective_message.reply_text(
             "Terjadi kesalahan internal. Mohon laporkan ini kepada pengembang bot."
