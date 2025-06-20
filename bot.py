@@ -74,9 +74,14 @@ def load_user_roles():
         spreadsheet = client.open_by_url(SHEET_URL)
         worksheet = spreadsheet.worksheet("USER ROLE") # Menggunakan nama sheet "USER ROLE"
 
-        # Mengambil semua record. gspread akan menggunakan baris pertama sebagai header
-        # dan mengembalikan list of dictionaries.
-        records = worksheet.get_all_records()
+        # Mengambil semua nilai dari worksheet sebagai list of lists
+        # Baris pertama (index 0) adalah header
+        # Data dimulai dari baris kedua (index 1)
+        all_data = worksheet.get_all_values()
+
+        if not all_data:
+            logger.warning("USER ROLE sheet is empty.")
+            return
 
         # Bersihkan admin_ids setiap kali dimuat ulang
         admin_ids.clear()
@@ -84,31 +89,37 @@ def load_user_roles():
         # Tambahkan owner_id sebagai admin default (Ini penting!)
         admin_ids.add(OWNER_ID)
 
-        for row in records:
+        # Loop melalui baris data, mulai dari baris kedua (index 1)
+        for i, row in enumerate(all_data[1:]): # Melewati header (all_data[0])
+            row_num = i + 2 # Nomor baris di sheet Google (mulai dari 2)
             try:
-                # Mengambil user_id dari kolom 'user_id'
-                user_id_str = row.get('user_id')
-                if user_id_str is None:
-                    logger.warning(f"Skipping row in 'USER ROLE' due to missing 'user_id': {row}")
+                # user_id ada di kolom A (index 0)
+                user_id_str = row[0] if len(row) > 0 else None
+                if not user_id_str:
+                    logger.warning(f"Skipping row {row_num} in 'USER ROLE' due to missing 'user_id' in column A.")
                     continue
-                user_id = int(user_id_str) # Pastikan user_id bisa diubah ke integer
+                user_id = int(user_id_str.strip()) # Pastikan user_id bisa diubah ke integer
 
-                # Mengambil role dari kolom 'role'
-                role = str(row.get('role')).strip().lower() # Normalisasi role
+                # role ada di kolom B (index 1)
+                role_str = row[1] if len(row) > 1 else None
+                if not role_str:
+                    logger.warning(f"Skipping row {row_num} in 'USER ROLE' due to missing 'role' in column B.")
+                    continue
+                role = str(role_str).strip().lower() # Normalisasi role
 
                 if role == 'admin':
                     admin_ids.add(user_id)
             except (ValueError, TypeError) as e:
                 # Log lebih detail untuk debugging jika ada baris yang error
-                logger.warning(f"Skipping row with invalid user_id or role in 'USER ROLE' sheet: {row}. Error: {e}")
+                logger.warning(f"Skipping row {row_num} in 'USER ROLE' sheet due to invalid data in column A (user_id) or B (role). Data: {row}. Error: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error processing row in 'USER ROLE' sheet: {row}. Error: {e}")
+                logger.error(f"Unexpected error processing row {row_num} in 'USER ROLE' sheet. Data: {row}. Error: {e}")
 
 
         logger.info(f"User roles loaded. Current Admins: {sorted(list(admin_ids))}")
 
     except Exception as e:
-        logger.critical(f"Failed to load user roles from Google Sheet (USER ROLE). Please check Google Cloud Console API status, Service Account permissions, and sheet headers/data consistency. Error: {e}")
+        logger.critical(f"Failed to load user roles from Google Sheet (USER ROLE). Please check Google Cloud Console API status, Service Account permissions, and sheet access. Error: {e}")
         raise # Re-raise for bot to crash if user roles cannot be loaded
 
 # --- Decorator untuk Admin Command ---
@@ -118,7 +129,7 @@ def admin_only(func):
             return await func(update, context)
         else:
             await update.message.reply_text("Maaf, perintah ini hanya untuk admin.")
-            logger.warning(f"Unauthorized access attempt by {update.effective_user.id} to {func.__name__} (command: {update.message.text})")
+            logger.warning(f"Unauthorized access attempt by {update.effective_user.id} ({update.effective_user.username}) to {func.__name__} (command: {update.message.text})")
     return wrapper
 
 # --- Command Handlers ---
