@@ -3,13 +3,14 @@ import logging
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     filters,
     ContextTypes,
+    CallbackQueryHandler
 )
 
 # --- Konfigurasi Logging ---
@@ -20,15 +21,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Environment Variables ---
-# Inisialisasi variabel dengan None atau default untuk penanganan error yang lebih baik
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')
 SHEET_URL = os.getenv('SHEET_URL')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 
-OWNER_ID = None
-PORT = 8080 # Default port
-
+# Konversi OWNER_ID dan PORT ke integer dengan penanganan error
 try:
     OWNER_ID = int(os.getenv('OWNER_ID'))
 except (ValueError, TypeError):
@@ -51,7 +49,6 @@ gsheet_client = None
 admin_ids = set() # Set untuk menyimpan ID admin
 
 def get_google_sheet_client():
-    """Menginisialisasi dan mengembalikan klien Google Sheets."""
     global gsheet_client
     if gsheet_client:
         return gsheet_client # Return existing client if already initialized
@@ -71,58 +68,63 @@ def get_google_sheet_client():
         raise # Re-raise for bot to crash, as this is critical
 
 def load_user_roles():
-    """Memuat peran pengguna (admin) dari Google Sheet 'Users'."""
     global admin_ids
     try:
         client = get_google_sheet_client()
         spreadsheet = client.open_by_url(SHEET_URL)
 
-        # Diagnosa awal keberadaan worksheet "Users"
+        # --- DIAGNOSA AWAL (Ini akan tetap membantu, tapi fokus utama di bawah) ---
         try:
             worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
             logger.info(f"Successfully connected to spreadsheet. Found worksheets: {worksheet_names}")
-            if "Users" not in worksheet_names:
+            if "Users" not in worksheet_names: # Perubahan: Cek "Users"
                 logger.critical(f"Worksheet 'Users' NOT FOUND in spreadsheet. Available worksheets: {worksheet_names}")
+                # Jangan langsung raise Value Error di sini, biarkan gspread.worksheet yang raises
+                # Agar errornya konsisten dengan gspread jika worksheet tidak ada
         except Exception as e:
             logger.critical(f"Error listing worksheets in spreadsheet. Please check permissions. Error: {e}")
             raise # Re-raise jika tidak bisa membaca daftar worksheet
+        # --- AKHIR DIAGNOSA AWAL ---
 
-        # Menggunakan nama worksheet "Users" (sesuai kesepakatan)
-        worksheet = spreadsheet.worksheet("Users")
+        # PERUBAHAN UTAMA DI SINI: Menggunakan nama worksheet "Users"
+        worksheet = spreadsheet.worksheet("Users") 
+
         all_data = worksheet.get_all_values()
 
-        if not all_data or len(all_data) < 2: # Periksa jika sheet kosong atau hanya header
-            logger.warning("Users sheet is empty or only contains headers.")
-            admin_ids.clear()
-            admin_ids.add(OWNER_ID) # Owner tetap admin meskipun sheet kosong
-            logger.info(f"User roles loaded. Current Admins: {sorted(list(admin_ids))}")
+        if not all_data:
+            logger.warning("Users sheet is empty.")
             return
 
         admin_ids.clear()
-        admin_ids.add(OWNER_ID) # Owner_ID selalu menjadi admin
+        admin_ids.add(OWNER_ID)
 
-        # Loop melalui baris data, mulai dari baris kedua (index 1) untuk melewati header
-        for i, row in enumerate(all_data[1:]):
+        # Loop melalui baris data, mulai dari baris kedua (index 1)
+        for i, row in enumerate(all_data[1:]): # Melewati header (all_data[0])
             row_num = i + 2 # Nomor baris di sheet Google (mulai dari 2)
             try:
+                # user_id ada di kolom A (index 0)
                 user_id_str = row[0] if len(row) > 0 else None
                 if not user_id_str:
                     logger.warning(f"Skipping row {row_num} in 'Users' due to missing 'user_id' in column A.")
                     continue
                 user_id = int(user_id_str.strip()) # Pastikan user_id bisa diubah ke integer
 
+                # role ada di kolom B (index 1)
                 role_str = row[1] if len(row) > 1 else None
                 if not role_str:
                     logger.warning(f"Skipping row {row_num} in 'Users' due to missing 'role' in column B.")
                     continue
                 role = str(role_str).strip().lower() # Normalisasi role
 
+                # Opsi role: owner, admin, user. Kita hanya peduli 'admin' untuk admin_ids.
+                # Owner_ID sudah secara otomatis ditambahkan ke admin_ids di atas.
                 if role == 'admin':
                     admin_ids.add(user_id)
             except (ValueError, TypeError) as e:
                 logger.warning(f"Skipping row {row_num} in 'Users' sheet due to invalid data in column A (user_id) or B (role). Data: {row}. Error: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error processing row {row_num} in 'Users' sheet. Data: {row}. Error: {e}")
+
 
         logger.info(f"User roles loaded. Current Admins: {sorted(list(admin_ids))}")
 
@@ -132,7 +134,6 @@ def load_user_roles():
 
 # --- Decorator untuk Admin Command ---
 def admin_only(func):
-    """Decorator untuk membatasi akses perintah hanya untuk admin."""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id in admin_ids:
             return await func(update, context)
@@ -143,12 +144,10 @@ def admin_only(func):
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menangani perintah /start."""
     await update.message.reply_text("Halo! Saya bot Sales Check-in Anda. Gunakan /help untuk melihat perintah.")
     logger.info(f"User {update.effective_user.id} ({update.effective_user.username}) started the bot.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan daftar perintah yang tersedia."""
     help_text = (
         "Daftar perintah:\n"
         "/start - Memulai bot\n"
@@ -164,7 +163,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def reload_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memuat ulang peran pengguna dari Google Sheet (Admin Only)."""
     try:
         load_user_roles()
         await update.message.reply_text("Peran pengguna berhasil dimuat ulang.")
@@ -175,13 +173,11 @@ async def reload_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def show_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan ID admin yang terdaftar (Admin Only)."""
     admin_list = "\n".join(map(str, sorted(list(admin_ids))))
     await update.message.reply_text(f"Daftar Admin ID:\n{admin_list}")
     logger.info(f"Admin {update.effective_user.id} ({update.effective_user.username}) requested admin list.")
 
 async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mencatat data penjualan ke Google Sheet 'Sales Data'."""
     args = context.args
     if len(args) < 2:
         await update.message.reply_text("Format salah. Gunakan: `/checkin <produk> <harga>` (contoh: `/checkin ProdukA 150000`)")
@@ -204,9 +200,11 @@ async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = get_google_sheet_client()
         spreadsheet = client.open_by_url(SHEET_URL)
         # Asumsikan data penjualan masuk ke sheet bernama "Sales Data"
-        worksheet = spreadsheet.worksheet("Sales Data")
+        worksheet = spreadsheet.worksheet("Sales Data") 
 
-        # Menemukan baris terakhir yang berisi data untuk append ke baris berikutnya
+        # Menemukan baris terakhir yang berisi data
+        # Jika sheet kosong, start_row akan menjadi 1 (header)
+        # Jika ada data, kita akan append ke baris berikutnya
         next_row = len(worksheet.get_all_values()) + 1
 
         # Menulis data ke baris baru.
@@ -222,7 +220,6 @@ async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error during check-in for {user_id} ({username}): {e}")
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menangani perintah yang tidak dikenali."""
     await update.message.reply_text("Maaf, perintah tersebut tidak saya kenali. Gunakan /help untuk melihat daftar perintah.")
     logger.info(f"Unknown command received from {update.effective_user.id} ({update.effective_user.username}): {update.message.text}")
 
