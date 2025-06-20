@@ -72,21 +72,30 @@ def load_user_roles():
     try:
         client = get_google_sheet_client()
         spreadsheet = client.open_by_url(SHEET_URL)
-        worksheet = spreadsheet.worksheet("USER ROLE") # Menggunakan nama sheet "USER ROLE"
 
-        # Mengambil semua nilai dari worksheet sebagai list of lists
-        # Baris pertama (index 0) adalah header
-        # Data dimulai dari baris kedua (index 1)
+        # --- DIAGNOSA AWAL (Ini akan tetap membantu, tapi fokus utama di bawah) ---
+        try:
+            worksheet_names = [ws.title for ws in spreadsheet.worksheets()]
+            logger.info(f"Successfully connected to spreadsheet. Found worksheets: {worksheet_names}")
+            if "Users" not in worksheet_names: # Perubahan: Cek "Users"
+                logger.critical(f"Worksheet 'Users' NOT FOUND in spreadsheet. Available worksheets: {worksheet_names}")
+                # Jangan langsung raise Value Error di sini, biarkan gspread.worksheet yang raises
+                # Agar errornya konsisten dengan gspread jika worksheet tidak ada
+        except Exception as e:
+            logger.critical(f"Error listing worksheets in spreadsheet. Please check permissions. Error: {e}")
+            raise # Re-raise jika tidak bisa membaca daftar worksheet
+        # --- AKHIR DIAGNOSA AWAL ---
+
+        # PERUBAHAN UTAMA DI SINI: Menggunakan nama worksheet "Users"
+        worksheet = spreadsheet.worksheet("Users") 
+
         all_data = worksheet.get_all_values()
 
         if not all_data:
-            logger.warning("USER ROLE sheet is empty.")
+            logger.warning("Users sheet is empty.")
             return
 
-        # Bersihkan admin_ids setiap kali dimuat ulang
         admin_ids.clear()
-
-        # Tambahkan owner_id sebagai admin default (Ini penting!)
         admin_ids.add(OWNER_ID)
 
         # Loop melalui baris data, mulai dari baris kedua (index 1)
@@ -96,30 +105,31 @@ def load_user_roles():
                 # user_id ada di kolom A (index 0)
                 user_id_str = row[0] if len(row) > 0 else None
                 if not user_id_str:
-                    logger.warning(f"Skipping row {row_num} in 'USER ROLE' due to missing 'user_id' in column A.")
+                    logger.warning(f"Skipping row {row_num} in 'Users' due to missing 'user_id' in column A.")
                     continue
                 user_id = int(user_id_str.strip()) # Pastikan user_id bisa diubah ke integer
 
                 # role ada di kolom B (index 1)
                 role_str = row[1] if len(row) > 1 else None
                 if not role_str:
-                    logger.warning(f"Skipping row {row_num} in 'USER ROLE' due to missing 'role' in column B.")
+                    logger.warning(f"Skipping row {row_num} in 'Users' due to missing 'role' in column B.")
                     continue
                 role = str(role_str).strip().lower() # Normalisasi role
 
+                # Opsi role: owner, admin, user. Kita hanya peduli 'admin' untuk admin_ids.
+                # Owner_ID sudah secara otomatis ditambahkan ke admin_ids di atas.
                 if role == 'admin':
                     admin_ids.add(user_id)
             except (ValueError, TypeError) as e:
-                # Log lebih detail untuk debugging jika ada baris yang error
-                logger.warning(f"Skipping row {row_num} in 'USER ROLE' sheet due to invalid data in column A (user_id) or B (role). Data: {row}. Error: {e}")
+                logger.warning(f"Skipping row {row_num} in 'Users' sheet due to invalid data in column A (user_id) or B (role). Data: {row}. Error: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error processing row {row_num} in 'USER ROLE' sheet. Data: {row}. Error: {e}")
+                logger.error(f"Unexpected error processing row {row_num} in 'Users' sheet. Data: {row}. Error: {e}")
 
 
         logger.info(f"User roles loaded. Current Admins: {sorted(list(admin_ids))}")
 
     except Exception as e:
-        logger.critical(f"Failed to load user roles from Google Sheet (USER ROLE). Please check Google Cloud Console API status, Service Account permissions, and sheet access. Error: {e}")
+        logger.critical(f"Failed to load user roles from Google Sheet (Users). Please check Google Cloud Console API status, Service Account permissions, and sheet access. Error: {e}")
         raise # Re-raise for bot to crash if user roles cannot be loaded
 
 # --- Decorator untuk Admin Command ---
@@ -220,7 +230,7 @@ def main():
     try:
         # Panggil fungsi init Google Sheets dan load roles di awal
         get_google_sheet_client()
-        load_user_roles()
+        load_user_roles() # Ini akan memuat peran pengguna
     except Exception:
         # Error saat init/load roles sudah dicatat sebagai CRITICAL, jadi langsung keluar
         logger.critical("Bot initialization failed. Exiting.")
