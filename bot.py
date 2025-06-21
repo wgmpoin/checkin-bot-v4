@@ -3,7 +3,7 @@ import logging
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -47,6 +47,7 @@ if not all([TELEGRAM_TOKEN, WEBHOOK_HOST, SHEET_URL, GOOGLE_CREDENTIALS_JSON]):
 # --- Google Sheets Initialization ---
 gsheet_client = None
 admin_ids = set() # Set untuk menyimpan ID admin
+user_ids = set()  # Set untuk menyimpan ID semua pengguna terdaftar (role 'user', 'admin', 'owner')
 
 def get_google_sheet_client():
     global gsheet_client
@@ -68,7 +69,8 @@ def get_google_sheet_client():
         raise # Re-raise for bot to crash, as this is critical
 
 def load_user_roles():
-    global admin_ids
+    """Memuat peran pengguna dari Google Sheet 'Users'."""
+    global admin_ids, user_ids
     try:
         client = get_google_sheet_client()
         spreadsheet = client.open_by_url(SHEET_URL)
@@ -86,12 +88,16 @@ def load_user_roles():
         worksheet = spreadsheet.worksheet("Users") 
         all_data = worksheet.get_all_values()
 
+        admin_ids.clear()
+        user_ids.clear()
+        
+        # OWNER_ID selalu admin dan user
+        admin_ids.add(OWNER_ID)
+        user_ids.add(OWNER_ID)
+
         if not all_data:
             logger.warning("Lembar 'Users' kosong.")
             return
-
-        admin_ids.clear()
-        admin_ids.add(OWNER_ID)
 
         # Loop melalui baris data, mulai dari baris kedua (index 1)
         for i, row in enumerate(all_data[1:]): # Melewati header (all_data[0])
@@ -111,21 +117,26 @@ def load_user_roles():
                     continue
                 role = str(role_str).strip().lower() # Normalisasi role
 
-                if role == 'admin':
+                # Tambahkan ke set user_ids jika valid
+                user_ids.add(user_id)
+                
+                # Tambahkan ke set admin_ids jika peran adalah 'admin' atau 'owner'
+                if role == 'admin' or user_id == OWNER_ID: # Owner juga dianggap admin
                     admin_ids.add(user_id)
             except (ValueError, TypeError) as e:
                 logger.warning(f"Melewati baris {row_num} di lembar 'Users' karena data tidak valid di kolom A (user_id) atau B (role). Data: {row}. Error: {e}")
             except Exception as e:
                 logger.error(f"Kesalahan tak terduga saat memproses baris {row_num} di lembar 'Users'. Data: {row}. Error: {e}")
 
-        logger.info(f"Peran pengguna dimuat. Admin saat ini: {sorted(list(admin_ids))}")
+        logger.info(f"Peran pengguna dimuat. Admin: {sorted(list(admin_ids))}. Total Pengguna Terdaftar: {sorted(list(user_ids))}")
 
     except Exception as e:
         logger.critical(f"Gagal memuat peran pengguna dari Google Sheet (Users). Harap periksa status API Google Cloud Console, izin Akun Layanan, dan akses sheet. Error: {e}")
         raise # Re-raise for bot to crash if user roles cannot be loaded
 
-# --- Decorator untuk Admin Command ---
+# --- Dekorator untuk Akses Perintah ---
 def admin_only(func):
+    """Membatasi akses perintah hanya untuk admin."""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id in admin_ids:
             return await func(update, context)
@@ -134,8 +145,29 @@ def admin_only(func):
             logger.warning(f"Upaya akses tidak sah oleh {update.effective_user.id} ({update.effective_user.username}) ke {func.__name__} (perintah: {update.message.text})")
     return wrapper
 
+def owner_only(func):
+    """Membatasi akses perintah hanya untuk pemilik bot."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id == OWNER_ID:
+            return await func(update, context)
+        else:
+            await update.message.reply_text("Maaf, perintah ini hanya untuk pemilik bot.")
+            logger.warning(f"Upaya akses tidak sah oleh {update.effective_user.id} ({update.effective_user.username}) ke {func.__name__} (perintah: {update.message.text})")
+    return wrapper
+
+def registered_user_only(func):
+    """Membatasi akses perintah hanya untuk pengguna yang terdaftar di sheet 'Users'."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id in user_ids:
+            return await func(update, context)
+        else:
+            await update.message.reply_text("Maaf, Anda tidak memiliki akses untuk perintah ini. Silakan hubungi admin bot untuk mendaftar.")
+            logger.warning(f"Upaya akses tidak sah oleh {update.effective_user.id} ({update.effective_user.username}) ke {func.__name__} (perintah: {update.message.text}). Tidak terdaftar.")
+    return wrapper
+
 # --- States for Conversation Handler ---
 GET_LOCATION_NAME, GET_REGION, GET_LOCATION_PHOTO = range(3)
+ADD_ADMIN_ID, REMOVE_ADMIN_ID, ADD_USER_ID, REMOVE_USER_ID = range(3, 7) # New states for user management
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,18 +175,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) memulai bot.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     help_text = (
-        "Daftar perintah:\n"
+        "**Perintah yang tersedia:**\n"
         "/start - Memulai bot\n"
-        "/help - Menampilkan pesan bantuan ini\n"
-        "/checkin - Untuk memulai proses check-in lokasi\n"
+        "/help - Menampilkan bantuan ini\n"
+        "/checkin - Memulai check-in lokasi\n"
         "/kontak - Menampilkan informasi kontak\n"
+        "/myid - Melihat ID Telegram Anda\n"
+        "/cancel - Membatalkan proses yang sedang berjalan (misal: check-in)\n"
     )
-    if update.effective_user.id in admin_ids: # Keep for /reloadroles for now, though showadmins is removed
-        help_text += "\n--- Perintah Admin ---\n"
-        help_text += "/reloadroles - Memuat ulang peran pengguna dari Google Sheet\n"
-    await update.message.reply_text(help_text)
+    if user_id in admin_ids:
+        help_text += (
+            "\n\n**--- Perintah Admin ---**\n"
+            "/reloadroles - Memuat ulang peran pengguna dari Google Sheet\n"
+            "/listuser - Melihat ID seluruh pengguna terdaftar (termasuk admin/owner)\n"
+            "/listadmins - Melihat ID admin yang terdaftar\n"
+        )
+    if user_id == OWNER_ID:
+        help_text += (
+            "\n\n**--- Perintah Owner ---**\n"
+            "/addadmin - Menambah user sebagai admin\n"
+            "/removeadmin - Menghapus admin\n"
+            "/adduser - Menambah user baru\n"
+            "/removeuser - Menghapus user\n"
+        )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
     logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) meminta bantuan.")
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"ID Telegram Anda: `{update.effective_user.id}`", parse_mode='Markdown')
+    logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) meminta ID-nya.")
 
 @admin_only
 async def reload_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,6 +216,24 @@ async def reload_roles(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Gagal memuat ulang peran: {e}")
         logger.error(f"Admin {update.effective_user.id} ({update.effective_user.username}) gagal memuat ulang peran: {e}")
+
+@admin_only
+async def listadmins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not admin_ids:
+        await update.message.reply_text("Tidak ada admin yang terdaftar selain pemilik bot.")
+        return
+    admin_list = "\n".join(map(str, sorted(list(admin_ids))))
+    await update.message.reply_text(f"Daftar Admin ID:\n`{admin_list}`", parse_mode='Markdown')
+    logger.info(f"Admin {update.effective_user.id} ({update.effective_user.username}) meminta daftar admin.")
+
+@admin_only
+async def listuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not user_ids:
+        await update.message.reply_text("Tidak ada pengguna terdaftar.")
+        return
+    user_list = "\n".join(map(str, sorted(list(user_ids))))
+    await update.message.reply_text(f"Daftar Pengguna Terdaftar ID:\n`{user_list}`", parse_mode='Markdown')
+    logger.info(f"Admin {update.effective_user.id} ({update.effective_user.username}) meminta daftar pengguna terdaftar.")
 
 async def kontak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contact_info = (
@@ -183,7 +252,7 @@ async def kontak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(contact_info, parse_mode='Markdown')
     logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) meminta informasi kontak.")
 
-
+@registered_user_only # Hanya pengguna terdaftar yang bisa checkin
 async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Memulai percakapan check-in dan meminta nama lokasi."""
     await update.message.reply_text("Baik, mari kita mulai proses check-in.\nMohon berikan **Nama tempat/lokasi** Anda:")
@@ -195,7 +264,7 @@ async def get_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Menerima nama lokasi dan meminta wilayah."""
     location_name = update.message.text
     context.user_data['checkin_data']['nama_lokasi'] = location_name
-    await update.message.reply_text(f"Baik, lokasi Anda: **{location_name}**.\nSekarang, mohon berikan **Wilayah**:")
+    await update.message.reply_text(f"Baik, lokasi Anda: **{location_name}**.\nSekarang, mohon berikan **Wilayah** (misal: Jakarta Pusat, Surabaya, dll.):")
     logger.info(f"Pengguna {update.effective_user.id} memberikan nama lokasi: {location_name}")
     return GET_REGION
 
@@ -223,7 +292,8 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         location = update.message.location
         latitude = location.latitude
         longitude = location.longitude
-        Maps_link = f"http://maps.google.com/?q={latitude},{longitude}" # Corrected Google Maps link format
+        # Menggunakan format link Google Maps yang lebih umum dan disarankan
+        Maps_link = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
 
         context.user_data['checkin_data']['link_google_map'] = Maps_link
 
@@ -289,6 +359,224 @@ async def cancel_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info(f"Pengguna {update.effective_user.id} mencoba membatalkan, tetapi tidak ada check-in yang aktif.")
     return ConversationHandler.END
 
+# --- Owner-only User Management Commands ---
+
+async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, initiator_id: int, initiator_name: str, bot_obj: Bot = None):
+    """
+    Fungsi bantu untuk menambah/menghapus/memperbarui peran pengguna di Google Sheet.
+    Args:
+        user_id (int): ID pengguna yang akan dikelola.
+        role (str): Peran yang akan diberikan ('admin' atau 'user').
+        add_or_remove (str): 'add', 'remove_admin', 'remove_user'.
+        initiator_id (int): ID pengguna yang memulai aksi.
+        initiator_name (str): Nama pengguna yang memulai aksi.
+        bot_obj (Bot): Objek bot, opsional untuk mengirim notifikasi ke user_id yang diubah.
+    Returns:
+        tuple: (bool success, str message)
+    """
+    try:
+        client = get_google_sheet_client()
+        sheet = client.open_by_url(SHEET_URL).worksheet("Users")
+        
+        # Dapatkan semua data untuk mencari ID pengguna
+        data = sheet.get_all_values()
+        header = data[0] if data else []
+        rows = data[1:]
+
+        user_id_col_idx = header.index('user_id') if 'user_id' in header else 0
+        role_col_idx = header.index('role') if 'role' in header else 1
+        first_name_col_idx = header.index('first_name') if 'first_name' in header else 2
+        username_col_idx = header.index('username') if 'username' in header else 3
+        added_by_id_col_idx = header.index('added_by_id') if 'added_by_id' in header else 4
+        added_by_name_col_idx = header.index('added_by_name') if 'added_by_name' in header else 5
+        added_date_col_idx = header.index('added_date') if 'added_date' in header else 6
+
+        # Cari baris dengan user_id yang cocok
+        target_row_idx = -1
+        for i, row in enumerate(rows):
+            try:
+                if int(row[user_id_col_idx]) == user_id:
+                    target_row_idx = i + 2 # +2 karena header dan 0-indexed list
+                    break
+            except (ValueError, IndexError):
+                continue # Skip invalid rows
+
+        if add_or_remove == 'add':
+            if target_row_idx != -1:
+                # User sudah ada, perbarui perannya
+                current_role = sheet.cell(target_row_idx, role_col_idx + 1).value
+                if current_role and current_role.lower() == role:
+                    return False, f"Pengguna ID `{user_id}` sudah terdaftar sebagai {role}."
+                sheet.update_cell(target_row_idx, role_col_idx + 1, role)
+                logger.info(f"Memperbarui peran pengguna {user_id} menjadi {role}.")
+                if bot_obj:
+                    try:
+                        await bot_obj.send_message(user_id, f"Peran Anda di bot telah diperbarui menjadi **{role.upper()}** oleh admin.")
+                    except Exception as e:
+                        logger.warning(f"Gagal mengirim notifikasi ke user {user_id}: {e}")
+                return True, f"Berhasil memperbarui peran pengguna ID `{user_id}` menjadi **{role}**."
+            else:
+                # User belum ada, tambahkan baris baru
+                new_row = [''] * max(role_col_idx, added_date_col_idx, 6) # Pastikan kolom cukup
+                new_row[user_id_col_idx] = str(user_id)
+                new_row[role_col_idx] = role
+                # Ambil info user jika memungkinkan (hanya bisa jika bot sudah pernah berinteraksi atau user_id aktif)
+                user_info = None
+                try:
+                    user_info = await bot_obj.get_chat_member(user_id, user_id) if bot_obj else None
+                except Exception:
+                    logger.warning(f"Tidak dapat mengambil info chat_member untuk ID {user_id} saat menambahkan.")
+                    user_info = None
+
+                new_row[first_name_col_idx] = user_info.user.first_name if user_info and user_info.user.first_name else 'N/A'
+                new_row[username_col_idx] = user_info.user.username if user_info and user_info.user.username else 'N/A'
+                new_row[added_by_id_col_idx] = str(initiator_id)
+                new_row[added_by_name_col_idx] = initiator_name
+                new_row[added_date_col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                sheet.append_row(new_row)
+                logger.info(f"Menambahkan pengguna {user_id} dengan peran {role}.")
+                if bot_obj:
+                    try:
+                        await bot_obj.send_message(user_id, f"Anda telah ditambahkan ke bot dengan peran **{role.upper()}** oleh admin.")
+                    except Exception as e:
+                        logger.warning(f"Gagal mengirim notifikasi ke user {user_id}: {e}")
+                return True, f"Berhasil menambahkan pengguna ID `{user_id}` sebagai **{role}**."
+        
+        elif add_or_remove == 'remove_admin':
+            if target_row_idx != -1:
+                current_role = sheet.cell(target_row_idx, role_col_idx + 1).value
+                if not current_role or current_role.lower() != 'admin':
+                    return False, f"Pengguna ID `{user_id}` bukan seorang admin."
+                if user_id == OWNER_ID:
+                    return False, "Anda tidak dapat menghapus pemilik bot dari daftar admin."
+                
+                # Perbarui peran menjadi 'user' biasa
+                sheet.update_cell(target_row_idx, role_col_idx + 1, 'user')
+                logger.info(f"Menghapus pengguna {user_id} dari peran admin.")
+                if bot_obj:
+                    try:
+                        await bot_obj.send_message(user_id, "Peran admin Anda di bot telah dihapus.")
+                    except Exception as e:
+                        logger.warning(f"Gagal mengirim notifikasi ke user {user_id}: {e}")
+                return True, f"Berhasil menghapus pengguna ID `{user_id}` dari peran admin."
+            else:
+                return False, f"Pengguna ID `{user_id}` tidak ditemukan dalam daftar pengguna."
+
+        elif add_or_remove == 'remove_user':
+            if target_row_idx != -1:
+                if user_id == OWNER_ID:
+                    return False, "Anda tidak dapat menghapus pemilik bot."
+                sheet.delete_rows(target_row_idx)
+                logger.info(f"Menghapus pengguna {user_id} sepenuhnya dari sheet.")
+                if bot_obj:
+                    try:
+                        await bot_obj.send_message(user_id, "Anda telah dihapus sepenuhnya dari bot.")
+                    except Exception as e:
+                        logger.warning(f"Gagal mengirim notifikasi ke user {user_id}: {e}")
+                return True, f"Berhasil menghapus pengguna ID `{user_id}` sepenuhnya dari daftar."
+            else:
+                return False, f"Pengguna ID `{user_id}` tidak ditemukan dalam daftar pengguna."
+
+    except Exception as e:
+        logger.error(f"Kesalahan saat mengelola pengguna ID {user_id} ({add_or_remove} {role}): {e}")
+        return False, f"Terjadi kesalahan: {e}"
+
+@owner_only
+async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memulai proses penambahan admin."""
+    await update.message.reply_text("Silakan kirim ID Telegram pengguna yang ingin Anda jadikan admin:")
+    return ADD_ADMIN_ID
+
+async def addadmin_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memproses ID untuk menambah admin."""
+    try:
+        target_user_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("ID tidak valid. Harap masukkan ID Telegram yang berupa angka.")
+        return ADD_ADMIN_ID # Tetap di state ini
+
+    initiator_id = update.effective_user.id
+    initiator_name = update.effective_user.first_name if update.effective_user.first_name else update.effective_user.username
+
+    success, message = await manage_user_in_sheet(target_user_id, 'admin', 'add', initiator_id, initiator_name, context.bot)
+    await update.message.reply_text(message, parse_mode='Markdown')
+    if success:
+        load_user_roles() # Muat ulang peran setelah perubahan
+    return ConversationHandler.END
+
+@owner_only
+async def removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memulai proses penghapusan admin."""
+    await update.message.reply_text("Silakan kirim ID Telegram admin yang ingin Anda hapus dari peran admin:")
+    return REMOVE_ADMIN_ID
+
+async def removeadmin_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memproses ID untuk menghapus admin."""
+    try:
+        target_user_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("ID tidak valid. Harap masukkan ID Telegram yang berupa angka.")
+        return REMOVE_ADMIN_ID # Tetap di state ini
+
+    initiator_id = update.effective_user.id
+    initiator_name = update.effective_user.first_name if update.effective_user.first_name else update.effective_user.username
+
+    success, message = await manage_user_in_sheet(target_user_id, 'admin', 'remove_admin', initiator_id, initiator_name, context.bot)
+    await update.message.reply_text(message, parse_mode='Markdown')
+    if success:
+        load_user_roles() # Muat ulang peran setelah perubahan
+    return ConversationHandler.END
+
+@owner_only
+async def adduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memulai proses penambahan user."""
+    await update.message.reply_text("Silakan kirim ID Telegram pengguna yang ingin Anda tambahkan sebagai user biasa:")
+    return ADD_USER_ID
+
+async def adduser_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memproses ID untuk menambah user."""
+    try:
+        target_user_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("ID tidak valid. Harap masukkan ID Telegram yang berupa angka.")
+        return ADD_USER_ID # Tetap di state ini
+
+    initiator_id = update.effective_user.id
+    initiator_name = update.effective_user.first_name if update.effective_user.first_name else update.effective_user.username
+
+    success, message = await manage_user_in_sheet(target_user_id, 'user', 'add', initiator_id, initiator_name, context.bot)
+    await update.message.reply_text(message, parse_mode='Markdown')
+    if success:
+        load_user_roles() # Muat ulang peran setelah perubahan
+    return ConversationHandler.END
+
+@owner_only
+async def removeuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memulai proses penghapusan user."""
+    await update.message.reply_text("Silakan kirim ID Telegram pengguna yang ingin Anda hapus sepenuhnya dari daftar:")
+    return REMOVE_USER_ID
+
+async def removeuser_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Owner: Memproses ID untuk menghapus user."""
+    try:
+        target_user_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("ID tidak valid. Harap masukkan ID Telegram yang berupa angka.")
+        return REMOVE_USER_ID # Tetap di state ini
+    
+    if target_user_id == OWNER_ID:
+        await update.message.reply_text("Anda tidak dapat menghapus pemilik bot.")
+        return ConversationHandler.END
+
+    initiator_id = update.effective_user.id
+    initiator_name = update.effective_user.first_name if update.effective_user.first_name else update.effective_user.username
+
+    success, message = await manage_user_in_sheet(target_user_id, '', 'remove_user', initiator_id, initiator_name, context.bot)
+    await update.message.reply_text(message, parse_mode='Markdown')
+    if success:
+        load_user_roles() # Muat ulang peran setelah perubahan
+    return ConversationHandler.END
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Maaf, perintah tersebut tidak saya kenali. Gunakan /help untuk melihat daftar perintah.")
@@ -318,15 +606,58 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_checkin)], # Fallback to cancel command
         allow_reentry=True # Allow users to start /checkin again if they get stuck
     )
-
-    # Add conversation handler
     application.add_handler(checkin_conversation_handler)
+
+    # Conversation Handlers for Owner-only User Management
+    add_admin_handler = ConversationHandler(
+        entry_points=[CommandHandler("addadmin", addadmin_command)],
+        states={
+            ADD_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, addadmin_process)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_checkin)],
+        allow_reentry=True
+    )
+    application.add_handler(add_admin_handler)
+
+    remove_admin_handler = ConversationHandler(
+        entry_points=[CommandHandler("removeadmin", removeadmin_command)],
+        states={
+            REMOVE_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, removeadmin_process)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_checkin)],
+        allow_reentry=True
+    )
+    application.add_handler(remove_admin_handler)
+
+    add_user_handler = ConversationHandler(
+        entry_points=[CommandHandler("adduser", adduser_command)],
+        states={
+            ADD_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, adduser_process)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_checkin)],
+        allow_reentry=True
+    )
+    application.add_handler(add_user_handler)
+
+    remove_user_handler = ConversationHandler(
+        entry_points=[CommandHandler("removeuser", removeuser_command)],
+        states={
+            REMOVE_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, removeuser_process)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_checkin)],
+        allow_reentry=True
+    )
+    application.add_handler(remove_user_handler)
+
 
     # Other Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("reloadroles", reload_roles))
-    application.add_handler(CommandHandler("kontak", kontak)) # New kontak command
+    application.add_handler(CommandHandler("listadmins", listadmins))
+    application.add_handler(CommandHandler("listuser", listuser))
+    application.add_handler(CommandHandler("kontak", kontak))
     
     # Message Handler for unknown commands (should be after specific command handlers)
     application.add_handler(MessageHandler(filters.COMMAND, unknown))
@@ -342,4 +673,6 @@ def main():
     logger.info("Bot berjalan melalui webhook.")
 
 if __name__ == '__main__':
+    # Pastikan datetime diimpor untuk manage_user_in_sheet
+    from datetime import datetime
     main()
