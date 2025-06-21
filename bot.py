@@ -3,7 +3,7 @@ import logging
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton # Bot ditambahkan di sini
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -12,6 +12,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler
 )
+from datetime import datetime # datetime diimpor di sini
 
 # --- Konfigurasi Logging ---
 logging.basicConfig(
@@ -85,12 +86,12 @@ def load_user_roles():
             logger.critical(f"Kesalahan daftar lembar kerja di spreadsheet. Harap periksa izin. Error: {e}")
             raise # Re-raise jika tidak bisa membaca daftar worksheet
 
-        worksheet = spreadsheet.worksheet("Users") 
+        worksheet = spreadsheet.worksheet("Users")
         all_data = worksheet.get_all_values()
 
         admin_ids.clear()
         user_ids.clear()
-        
+
         # OWNER_ID selalu admin dan user
         admin_ids.add(OWNER_ID)
         user_ids.add(OWNER_ID)
@@ -119,7 +120,7 @@ def load_user_roles():
 
                 # Tambahkan ke set user_ids jika valid
                 user_ids.add(user_id)
-                
+
                 # Tambahkan ke set admin_ids jika peran adalah 'admin' atau 'owner'
                 if role == 'admin' or user_id == OWNER_ID: # Owner juga dianggap admin
                     admin_ids.add(user_id)
@@ -293,7 +294,7 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         latitude = location.latitude
         longitude = location.longitude
         # Menggunakan format link Google Maps yang lebih umum dan disarankan
-        Maps_link = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
+        Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Perbaikan link Google Maps
 
         context.user_data['checkin_data']['link_google_map'] = Maps_link
 
@@ -309,7 +310,7 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             client = get_google_sheet_client()
             spreadsheet = client.open_by_url(SHEET_URL)
             # Pastikan nama sheet yang benar "Check-in Data"
-            worksheet = spreadsheet.worksheet("Check-in Data") 
+            worksheet = spreadsheet.worksheet("Check-in Data")
 
             # Data yang akan dimasukkan, cocok dengan kolom sheet:
             # A User id, B nama, C username, D timestamp, E nama lokasi, F wilayah, G link google map
@@ -322,9 +323,9 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 wilayah,
                 Maps_link
             ]
-            
+
             worksheet.append_row(row_data) # Menambahkan ke baris kosong pertama
-            
+
             response_message = (
                 "Check-in berhasil dicatat!\n\n"
                 f"**Nama Tempat:** {nama_lokasi}\n"
@@ -337,7 +338,7 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception as e:
             await update.message.reply_text(f"Terjadi kesalahan saat mencatat check-in ke Google Sheet: {e}. Mohon coba lagi nanti.")
             logger.error(f"Kesalahan selama check-in untuk {user_id} ({username}): {e}")
-        
+
         # Bersihkan user_data dan akhiri percakapan
         context.user_data.clear()
         return ConversationHandler.END
@@ -377,36 +378,49 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
     try:
         client = get_google_sheet_client()
         sheet = client.open_by_url(SHEET_URL).worksheet("Users")
-        
+
         # Dapatkan semua data untuk mencari ID pengguna
         data = sheet.get_all_values()
         header = data[0] if data else []
         rows = data[1:]
 
-        user_id_col_idx = header.index('user_id') if 'user_id' in header else 0
-        role_col_idx = header.index('role') if 'role' in header else 1
-        first_name_col_idx = header.index('first_name') if 'first_name' in header else 2
-        username_col_idx = header.index('username') if 'username' in header else 3
-        added_by_id_col_idx = header.index('added_by_id') if 'added_by_id' in header else 4
-        added_by_name_col_idx = header.index('added_by_name') if 'added_by_name' in header else 5
-        added_date_col_idx = header.index('added_date') if 'added_date' in header else 6
+        # Pastikan kolom yang diperlukan ada di header
+        required_headers = ['user_id', 'role', 'first_name', 'username', 'added_by_id', 'added_by_name', 'added_date']
+        for h in required_headers:
+            if h not in header:
+                # Jika header tidak ada, tambahkan ke sheet
+                # Ini akan terjadi jika sheet baru atau header belum lengkap
+                # Namun, lebih baik sheet disiapkan manual dengan header lengkap
+                logger.warning(f"Header '{h}' tidak ditemukan di sheet 'Users'. Pastikan header sudah lengkap.")
+                # Untuk menghindari IndexError, kita bisa buat indeks default
+                # Atau minta user untuk melengkapi header
+                return False, f"Kesalahan: Kolom '{h}' tidak ditemukan di sheet 'Users'. Harap lengkapi header sheet."
+
+        user_id_col_idx = header.index('user_id')
+        role_col_idx = header.index('role')
+        first_name_col_idx = header.index('first_name')
+        username_col_idx = header.index('username')
+        added_by_id_col_idx = header.index('added_by_id')
+        added_by_name_col_idx = header.index('added_by_name')
+        added_date_col_idx = header.index('added_date')
 
         # Cari baris dengan user_id yang cocok
         target_row_idx = -1
         for i, row in enumerate(rows):
             try:
-                if int(row[user_id_col_idx]) == user_id:
+                # Pastikan baris cukup panjang dan user_id_col_idx valid
+                if len(row) > user_id_col_idx and int(row[user_id_col_idx]) == user_id:
                     target_row_idx = i + 2 # +2 karena header dan 0-indexed list
                     break
             except (ValueError, IndexError):
-                continue # Skip invalid rows
+                continue # Skip invalid rows or rows that are too short
 
         if add_or_remove == 'add':
             if target_row_idx != -1:
                 # User sudah ada, perbarui perannya
                 current_role = sheet.cell(target_row_idx, role_col_idx + 1).value
                 if current_role and current_role.lower() == role:
-                    return False, f"Pengguna ID `{user_id}` sudah terdaftar sebagai {role}."
+                    return False, f"Pengguna ID `{user_id}` sudah terdaftar sebagai **{role}**."
                 sheet.update_cell(target_row_idx, role_col_idx + 1, role)
                 logger.info(f"Memperbarui peran pengguna {user_id} menjadi {role}.")
                 if bot_obj:
@@ -417,19 +431,22 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
                 return True, f"Berhasil memperbarui peran pengguna ID `{user_id}` menjadi **{role}**."
             else:
                 # User belum ada, tambahkan baris baru
-                new_row = [''] * max(role_col_idx, added_date_col_idx, 6) # Pastikan kolom cukup
+                # Pastikan ukuran baris cukup besar untuk semua kolom yang diperlukan
+                new_row = [''] * (max(user_id_col_idx, role_col_idx, first_name_col_idx, username_col_idx, added_by_id_col_idx, added_by_name_col_idx, added_date_col_idx) + 1)
                 new_row[user_id_col_idx] = str(user_id)
                 new_row[role_col_idx] = role
-                # Ambil info user jika memungkinkan (hanya bisa jika bot sudah pernah berinteraksi atau user_id aktif)
+                # Ambil info user jika memungkinkan
                 user_info = None
                 try:
-                    user_info = await bot_obj.get_chat_member(user_id, user_id) if bot_obj else None
+                    # fetch_chat_member lebih tepat untuk mendapatkan info user dari ID
+                    member = await bot_obj.get_chat_member(user_id, user_id) if bot_obj else None
+                    if member and member.user:
+                        user_info = member.user
                 except Exception:
                     logger.warning(f"Tidak dapat mengambil info chat_member untuk ID {user_id} saat menambahkan.")
-                    user_info = None
 
-                new_row[first_name_col_idx] = user_info.user.first_name if user_info and user_info.user.first_name else 'N/A'
-                new_row[username_col_idx] = user_info.user.username if user_info and user_info.user.username else 'N/A'
+                new_row[first_name_col_idx] = user_info.first_name if user_info and user_info.first_name else 'N/A'
+                new_row[username_col_idx] = user_info.username if user_info and user_info.username else 'N/A'
                 new_row[added_by_id_col_idx] = str(initiator_id)
                 new_row[added_by_name_col_idx] = initiator_name
                 new_row[added_date_col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -442,15 +459,15 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
                     except Exception as e:
                         logger.warning(f"Gagal mengirim notifikasi ke user {user_id}: {e}")
                 return True, f"Berhasil menambahkan pengguna ID `{user_id}` sebagai **{role}**."
-        
+
         elif add_or_remove == 'remove_admin':
             if target_row_idx != -1:
                 current_role = sheet.cell(target_row_idx, role_col_idx + 1).value
                 if not current_role or current_role.lower() != 'admin':
                     return False, f"Pengguna ID `{user_id}` bukan seorang admin."
                 if user_id == OWNER_ID:
-                    return False, "Anda tidak dapat menghapus pemilik bot dari daftar admin."
-                
+                    return False, "Anda tidak dapat menghapus pemilik bot dari peran admin."
+
                 # Perbarui peran menjadi 'user' biasa
                 sheet.update_cell(target_row_idx, role_col_idx + 1, 'user')
                 logger.info(f"Menghapus pengguna {user_id} dari peran admin.")
@@ -564,7 +581,7 @@ async def removeuser_process(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except ValueError:
         await update.message.reply_text("ID tidak valid. Harap masukkan ID Telegram yang berupa angka.")
         return REMOVE_USER_ID # Tetap di state ini
-    
+
     if target_user_id == OWNER_ID:
         await update.message.reply_text("Anda tidak dapat menghapus pemilik bot.")
         return ConversationHandler.END
@@ -658,7 +675,7 @@ def main():
     application.add_handler(CommandHandler("listadmins", listadmins))
     application.add_handler(CommandHandler("listuser", listuser))
     application.add_handler(CommandHandler("kontak", kontak))
-    
+
     # Message Handler for unknown commands (should be after specific command handlers)
     application.add_handler(MessageHandler(filters.COMMAND, unknown))
 
@@ -673,6 +690,4 @@ def main():
     logger.info("Bot berjalan melalui webhook.")
 
 if __name__ == '__main__':
-    # Pastikan datetime diimpor untuk manage_user_in_sheet
-    from datetime import datetime
     main()
