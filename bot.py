@@ -3,7 +3,7 @@ import logging
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton # Bot ditambahkan di sini
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -12,7 +12,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler
 )
-from datetime import datetime # datetime diimpor di sini
+from datetime import datetime
 
 # --- Konfigurasi Logging ---
 logging.basicConfig(
@@ -192,14 +192,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/reloadroles - Memuat ulang peran pengguna dari Google Sheet\n"
             "/listuser - Melihat ID seluruh pengguna terdaftar (termasuk admin/owner)\n"
             "/listadmins - Melihat ID admin yang terdaftar\n"
+            "/adduser - Menambah user baru\n" # Admin bisa add user
+            "/removeuser - Menghapus user\n" # Admin bisa remove user
         )
     if user_id == OWNER_ID:
         help_text += (
             "\n\n**--- Perintah Owner ---**\n"
             "/addadmin - Menambah user sebagai admin\n"
             "/removeadmin - Menghapus admin\n"
-            "/adduser - Menambah user baru\n"
-            "/removeuser - Menghapus user\n"
+            "(Note: Owner juga bisa menggunakan /adduser dan /removeuser)"
         )
     await update.message.reply_text(help_text, parse_mode='Markdown')
     logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) meminta bantuan.")
@@ -294,7 +295,7 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         latitude = location.latitude
         longitude = location.longitude
         # Menggunakan format link Google Maps yang lebih umum dan disarankan
-        Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Perbaikan link Google Maps
+        Maps_link = f"http://maps.google.com/?q={latitude},{longitude}" # Perbaikan link Google Maps
 
         context.user_data['checkin_data']['link_google_map'] = Maps_link
 
@@ -360,7 +361,7 @@ async def cancel_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.info(f"Pengguna {update.effective_user.id} mencoba membatalkan, tetapi tidak ada check-in yang aktif.")
     return ConversationHandler.END
 
-# --- Owner-only User Management Commands ---
+# --- Owner-only dan Admin-only User Management Commands ---
 
 async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, initiator_id: int, initiator_name: str, bot_obj: Bot = None):
     """
@@ -388,12 +389,7 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
         required_headers = ['user_id', 'role', 'first_name', 'username', 'added_by_id', 'added_by_name', 'added_date']
         for h in required_headers:
             if h not in header:
-                # Jika header tidak ada, tambahkan ke sheet
-                # Ini akan terjadi jika sheet baru atau header belum lengkap
-                # Namun, lebih baik sheet disiapkan manual dengan header lengkap
                 logger.warning(f"Header '{h}' tidak ditemukan di sheet 'Users'. Pastikan header sudah lengkap.")
-                # Untuk menghindari IndexError, kita bisa buat indeks default
-                # Atau minta user untuk melengkapi header
                 return False, f"Kesalahan: Kolom '{h}' tidak ditemukan di sheet 'Users'. Harap lengkapi header sheet."
 
         user_id_col_idx = header.index('user_id')
@@ -438,7 +434,6 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
                 # Ambil info user jika memungkinkan
                 user_info = None
                 try:
-                    # fetch_chat_member lebih tepat untuk mendapatkan info user dari ID
                     member = await bot_obj.get_chat_member(user_id, user_id) if bot_obj else None
                     if member and member.user:
                         user_info = member.user
@@ -545,14 +540,14 @@ async def removeadmin_process(update: Update, context: ContextTypes.DEFAULT_TYPE
         load_user_roles() # Muat ulang peran setelah perubahan
     return ConversationHandler.END
 
-@owner_only
+@admin_only # Perubahan: Admin bisa add user
 async def adduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Owner: Memulai proses penambahan user."""
+    """Admin/Owner: Memulai proses penambahan user."""
     await update.message.reply_text("Silakan kirim ID Telegram pengguna yang ingin Anda tambahkan sebagai user biasa:")
     return ADD_USER_ID
 
 async def adduser_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Owner: Memproses ID untuk menambah user."""
+    """Admin/Owner: Memproses ID untuk menambah user."""
     try:
         target_user_id = int(update.message.text.strip())
     except ValueError:
@@ -568,14 +563,14 @@ async def adduser_process(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         load_user_roles() # Muat ulang peran setelah perubahan
     return ConversationHandler.END
 
-@owner_only
+@admin_only # Perubahan: Admin bisa remove user
 async def removeuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Owner: Memulai proses penghapusan user."""
+    """Admin/Owner: Memulai proses penghapusan user."""
     await update.message.reply_text("Silakan kirim ID Telegram pengguna yang ingin Anda hapus sepenuhnya dari daftar:")
     return REMOVE_USER_ID
 
 async def removeuser_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Owner: Memproses ID untuk menghapus user."""
+    """Admin/Owner: Memproses ID untuk menghapus user."""
     try:
         target_user_id = int(update.message.text.strip())
     except ValueError:
@@ -625,7 +620,7 @@ def main():
     )
     application.add_handler(checkin_conversation_handler)
 
-    # Conversation Handlers for Owner-only User Management
+    # Conversation Handlers for Owner-only Admin Management
     add_admin_handler = ConversationHandler(
         entry_points=[CommandHandler("addadmin", addadmin_command)],
         states={
@@ -646,6 +641,7 @@ def main():
     )
     application.add_handler(remove_admin_handler)
 
+    # Conversation Handlers for Admin/Owner User Management
     add_user_handler = ConversationHandler(
         entry_points=[CommandHandler("adduser", adduser_command)],
         states={
