@@ -13,6 +13,7 @@ from telegram.ext import (
     ConversationHandler
 )
 from datetime import datetime
+import pytz # Import modul pytz
 
 # --- Konfigurasi Logging ---
 logging.basicConfig(
@@ -167,7 +168,7 @@ def registered_user_only(func):
     return wrapper
 
 # --- States for Conversation Handler ---
-GET_LOCATION_NAME, GET_REGION, GET_LOCATION = range(3) # State diubah dari GET_LOCATION_PHOTO menjadi GET_LOCATION
+GET_LOCATION_NAME, GET_REGION, GET_LOCATION = range(3)
 ADD_ADMIN_ID, REMOVE_ADMIN_ID, ADD_USER_ID, REMOVE_USER_ID = range(3, 7) # New states for user management
 
 # --- Command Handlers ---
@@ -288,7 +289,7 @@ async def get_region(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"Pengguna {update.effective_user.id} memberikan wilayah: {region}. Meminta lokasi.")
     return GET_LOCATION # Mengarahkan ke state GET_LOCATION untuk menerima lokasi
 
-async def get_location_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int: # Nama fungsi diubah
+async def get_location_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Menerima data lokasi (latitude/longitude) dan menyimpan ke Google Sheet."""
     if update.message.location:
         location = update.message.location
@@ -308,8 +309,9 @@ async def get_location_data(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         nama_lokasi = context.user_data['checkin_data'].get('nama_lokasi', 'N/A')
         wilayah = context.user_data['checkin_data'].get('wilayah', 'N/A')
 
-        # Get the current date and time for the confirmation message (waktu saat bot merespon)
-        current_datetime_for_message = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # BARIS TAMBAHAN UTAMA
+        # Get the current date and time for the confirmation message in GMT+7 (Asia/Jakarta)
+        jakarta_timezone = pytz.timezone('Asia/Jakarta') # Mendefinisikan zona waktu Jakarta
+        current_datetime_for_message = datetime.now(jakarta_timezone).strftime("%Y-%m-%d %H:%M:%S") # Menggunakan zona waktu Jakarta
 
         try:
             client = get_google_sheet_client()
@@ -331,7 +333,7 @@ async def get_location_data(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
             response_message = (
                 "Check-in berhasil dicatat!\n\n"
-                f"**Tanggal & Waktu Input:** {current_datetime_for_message}\n" # Menampilkan timestamp respons bot
+                f"**Tanggal & Waktu Input:** {current_datetime_for_message} (GMT+7)\n" # Menampilkan timestamp respons bot dengan indikator GMT+7
                 f"**Nama Tempat:** {nama_lokasi}\n"
                 f"**Wilayah:** {wilayah}\n"
                 f"**Link Google Maps:** {Maps_link}"
