@@ -167,7 +167,7 @@ def registered_user_only(func):
     return wrapper
 
 # --- States for Conversation Handler ---
-GET_LOCATION_NAME, GET_REGION, GET_LOCATION_PHOTO = range(3)
+GET_LOCATION_NAME, GET_REGION, GET_LOCATION = range(3) # State diubah dari GET_LOCATION_PHOTO menjadi GET_LOCATION
 ADD_ADMIN_ID, REMOVE_ADMIN_ID, ADD_USER_ID, REMOVE_USER_ID = range(3, 7) # New states for user management
 
 # --- Command Handlers ---
@@ -286,54 +286,57 @@ async def get_region(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         reply_markup=reply_markup
     )
     logger.info(f"Pengguna {update.effective_user.id} memberikan wilayah: {region}. Meminta lokasi.")
-    return GET_LOCATION_PHOTO
+    return GET_LOCATION # Mengarahkan ke state GET_LOCATION untuk menerima lokasi
 
-async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Menerima data lokasi dan menyimpan ke Google Sheet."""
+async def get_location_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int: # Nama fungsi diubah
+    """Menerima data lokasi (latitude/longitude) dan menyimpan ke Google Sheet."""
     if update.message.location:
         location = update.message.location
         latitude = location.latitude
         longitude = location.longitude
+
         # Menggunakan format link Google Maps yang lebih umum dan disarankan
-        Maps_link = f"http://maps.google.com/?q={latitude},{longitude}" # Perbaikan link Google Maps
+        Maps_link = f"http://maps.google.com/maps?q={latitude},{longitude}" # Perbaikan format link Google Maps
 
         context.user_data['checkin_data']['link_google_map'] = Maps_link
 
         user_id = update.effective_user.id
         first_name = update.effective_user.first_name if update.effective_user.first_name else ''
         username = update.effective_user.username if update.effective_user.username else ''
-        timestamp = update.message.date.strftime("%Y-%m-%d %H:%M:%S")
-
+        # timestamp ini mengambil waktu pesan dikirim dari Telegram
+        timestamp_telegram_message = update.message.date.strftime("%Y-%m-%d %H:%M:%S")
         nama_lokasi = context.user_data['checkin_data'].get('nama_lokasi', 'N/A')
         wilayah = context.user_data['checkin_data'].get('wilayah', 'N/A')
+
+        # Get the current date and time for the confirmation message (waktu saat bot merespon)
+        current_datetime_for_message = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # BARIS TAMBAHAN UTAMA
 
         try:
             client = get_google_sheet_client()
             spreadsheet = client.open_by_url(SHEET_URL)
-            # Pastikan nama sheet yang benar "Check-in Data"
-            worksheet = spreadsheet.worksheet("Check-in Data")
+            worksheet = spreadsheet.worksheet("Check-in Data") # Pastikan nama sheet yang benar "Check-in Data"
 
             # Data yang akan dimasukkan, cocok dengan kolom sheet:
-            # A User id, B nama, C username, D timestamp, E nama lokasi, F wilayah, G link google map
+            # A User id, B nama, C username, D timestamp (pesan telegram), E nama lokasi, F wilayah, G link google map
             row_data = [
                 str(user_id),
                 first_name,
                 username,
-                timestamp,
+                timestamp_telegram_message, # Menggunakan timestamp dari pesan Telegram
                 nama_lokasi,
                 wilayah,
                 Maps_link
             ]
-
             worksheet.append_row(row_data) # Menambahkan ke baris kosong pertama
 
             response_message = (
                 "Check-in berhasil dicatat!\n\n"
+                f"**Tanggal & Waktu Input:** {current_datetime_for_message}\n" # Menampilkan timestamp respons bot
                 f"**Nama Tempat:** {nama_lokasi}\n"
                 f"**Wilayah:** {wilayah}\n"
                 f"**Link Google Maps:** {Maps_link}"
             )
-            await update.message.reply_text(response_message)
+            await update.message.reply_text(response_message, parse_mode='Markdown')
             logger.info(f"Check-in oleh {user_id} ({username}): Lokasi={nama_lokasi}, Wilayah={wilayah}, Peta={Maps_link}")
 
         except Exception as e:
@@ -348,7 +351,7 @@ async def get_location_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Itu bukan lokasi yang valid. Mohon **bagikan lokasi Anda** dengan menekan ikon klip kertas (lampiran) lalu pilih 'Lokasi'."
         )
         logger.warning(f"Pengguna {update.effective_user.id} mengirim pesan non-lokasi selama langkah lokasi.")
-        return GET_LOCATION_PHOTO # Tetap di status yang sama sampai lokasi diterima
+        return GET_LOCATION # Tetap di status yang sama sampai lokasi diterima
 
 async def cancel_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Membatalkan percakapan check-in."""
@@ -362,7 +365,6 @@ async def cancel_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 # --- Owner-only dan Admin-only User Management Commands ---
-
 async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, initiator_id: int, initiator_name: str, bot_obj: Bot = None):
     """
     Fungsi bantu untuk menambah/menghapus/memperbarui peran pengguna di Google Sheet.
@@ -395,7 +397,7 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
         user_id_col_idx = header.index('user_id')
         role_col_idx = header.index('role')
         first_name_col_idx = header.index('first_name')
-        username_col_idx = header.index('username')
+        username_col_col_idx = header.index('username')
         added_by_id_col_idx = header.index('added_by_id')
         added_by_name_col_idx = header.index('added_by_name')
         added_date_col_idx = header.index('added_date')
@@ -428,7 +430,7 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
             else:
                 # User belum ada, tambahkan baris baru
                 # Pastikan ukuran baris cukup besar untuk semua kolom yang diperlukan
-                new_row = [''] * (max(user_id_col_idx, role_col_idx, first_name_col_idx, username_col_idx, added_by_id_col_idx, added_by_name_col_idx, added_date_col_idx) + 1)
+                new_row = [''] * (max(user_id_col_idx, role_col_idx, first_name_col_idx, username_col_col_idx, added_by_id_col_idx, added_by_name_col_idx, added_date_col_idx) + 1)
                 new_row[user_id_col_idx] = str(user_id)
                 new_row[role_col_idx] = role
                 # Ambil info user jika memungkinkan
@@ -441,7 +443,7 @@ async def manage_user_in_sheet(user_id: int, role: str, add_or_remove: str, init
                     logger.warning(f"Tidak dapat mengambil info chat_member untuk ID {user_id} saat menambahkan.")
 
                 new_row[first_name_col_idx] = user_info.first_name if user_info and user_info.first_name else 'N/A'
-                new_row[username_col_idx] = user_info.username if user_info and user_info.username else 'N/A'
+                new_row[username_col_col_idx] = user_info.username if user_info and user_info.username else 'N/A'
                 new_row[added_by_id_col_idx] = str(initiator_id)
                 new_row[added_by_name_col_idx] = initiator_name
                 new_row[added_date_col_idx] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -613,7 +615,7 @@ def main():
         states={
             GET_LOCATION_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location_name)],
             GET_REGION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_region)],
-            GET_LOCATION_PHOTO: [MessageHandler(filters.LOCATION, get_location_photo)],
+            GET_LOCATION: [MessageHandler(filters.LOCATION, get_location_data)], # Mengarahkan ke get_location_data
         },
         fallbacks=[CommandHandler("cancel", cancel_checkin)], # Fallback to cancel command
         allow_reentry=True # Allow users to start /checkin again if they get stuck
