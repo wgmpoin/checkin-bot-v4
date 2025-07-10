@@ -258,7 +258,7 @@ async def kontak(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @registered_user_only # Hanya pengguna terdaftar yang bisa checkin
 async def checkin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Memulai percakapan check-in dan meminta nama lokasi."""
-    await update.message.reply_text("Baik, mari kita mulai proses check-in.\nMohon berikan **Nama tempat/lokasi** Anda:")
+    await update.message.reply_text("Yuk check-in yuk!.\nNama tempat/lokasi Anda:")
     context.user_data['checkin_data'] = {} # Inisialisasi user_data untuk check-in ini
     logger.info(f"Pengguna {update.effective_user.id} ({update.effective_user.username}) memulai checkin.")
     return GET_LOCATION_NAME
@@ -267,7 +267,7 @@ async def get_location_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Menerima nama lokasi dan meminta wilayah."""
     location_name = update.message.text
     context.user_data['checkin_data']['nama_lokasi'] = location_name
-    await update.message.reply_text(f"Baik, lokasi Anda: **{location_name}**.\nSekarang, mohon berikan **Wilayah** (misal: Jakarta Pusat, Surabaya, dll.):")
+    await update.message.reply_text(f"Lokasi Anda: **{location_name}**.\nWilayah/daerah/kota:")
     logger.info(f"Pengguna {update.effective_user.id} memberikan nama lokasi: {location_name}")
     return GET_REGION
 
@@ -281,8 +281,8 @@ async def get_region(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text(
-        f"Terima kasih. Wilayah Anda: **{region}**.\n"
-        "Terakhir, mohon **bagikan lokasi Google Maps Anda** melalui fitur lampiran di Telegram.\n"
+        f"Wilayah Anda: **{region}**.\n"
+        "Terakhir, bagikan lokasi Google Maps Anda melalui fitur lampiran di Telegram.\n"
         "Anda bisa menekan tombol di bawah atau ikon klip kertas (attachment) lalu pilih 'Lokasi'.",
         reply_markup=reply_markup
     )
